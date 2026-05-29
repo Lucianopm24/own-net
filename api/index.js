@@ -47,131 +47,83 @@ mongoose.connection.once(
 // MODELS
 // =========================
 
-const UserSchema =
-new mongoose.Schema({
+// =========================
+// MODELS
+// =========================
 
-    username: {
-        type: String,
-        unique: true
-    },
-
+const UserSchema = new mongoose.Schema({
+    username: { type: String, unique: true },
     password: String,
-
-    lucks: {
-        type: Number,
-        default: 0
-    },
-
-    createdAt: {
-        type: Date,
-        default: Date.now
-    }
-
+    lucks: { type: Number, default: 0 },
+    createdAt: { type: Date, default: Date.now }
 })
 
-
-
-const DomainSchema =
-new mongoose.Schema({
-
-    domain: {
-        type: String,
-        unique: true
-    },
-
+const DomainSchema = new mongoose.Schema({
+    domain: { type: String, unique: true },
     owner: String,
-
-    cname: {
-        type: String,
-        default: null
-    },
-
-    mx: {
-        type: String,
-        default: null
-    },
-
-    createdAt: {
-        type: Date,
-        default: Date.now
-    }
-
+    cname: { type: String, default: null },
+    mx: { type: String, default: null },
+    createdAt: { type: Date, default: Date.now }
 })
 
-
-
-const UploadSchema =
-new mongoose.Schema({
-
-    id: {
-        type: String,
-        unique: true
-    },
-
+const UploadSchema = new mongoose.Schema({
+    id: { type: String, unique: true },
     owner: String,
-
     originalName: String,
-
     compressed: Buffer,
-
-    createdAt: {
-        type: Date,
-        default: Date.now
-    }
-
+    createdAt: { type: Date, default: Date.now }
 })
 
-
-
-const MailAccountSchema =
-new mongoose.Schema({
-
-    address: {
-        type: String,
-        unique: true
-    },
-
+const MailAccountSchema = new mongoose.Schema({
+    address: { type: String, unique: true },
     password: String,
-
     owner: String,
-
-    createdAt: {
-        type: Date,
-        default: Date.now
-    }
-
+    createdAt: { type: Date, default: Date.now }
 })
 
-
-
-const MailSchema =
-new mongoose.Schema({
-
+const MailSchema = new mongoose.Schema({
     domain: String,
-
     from: String,
-
     to: String,
-
     subject: String,
-
     body: String,
-
-    createdAt: {
-        type: Date,
-        default: Date.now
-    }
-
+    createdAt: { type: Date, default: Date.now }
 })
 
-const User = mongoose.model("User", UserSchema)
-const Domain = mongoose.model("Domain", DomainSchema)
-const UploadModel = mongoose.model("Upload", UploadSchema)
-const MailAccount = mongoose.model("MailAccount", MailAccountSchema)
-const Mail = mongoose.model("Mail", MailSchema)
+const SubdomainSchema = new mongoose.Schema({
+    domain: String,
+    subdomain: String,
+    cname: { type: String, default: null },
+    mx: { type: String, default: null },
+    owner: String,
+    createdAt: { type: Date, default: Date.now }
+})
+SubdomainSchema.index({ domain: 1, subdomain: 1 }, { unique: true })
+
+const ProjectSchema = new mongoose.Schema({
+    id: { type: String, unique: true },
+    name: String,
+    owner: String,
+    createdAt: { type: Date, default: Date.now }
+})
+
+const ProjectFileSchema = new mongoose.Schema({
+    projectId: String,
+    path: String,
+    compressed: Buffer,
+    updatedAt: { type: Date, default: Date.now }
+})
+ProjectFileSchema.index({ projectId: 1, path: 1 }, { unique: true })
+
+const User = mongoose.models.User || mongoose.model("User", UserSchema)
+const Domain = mongoose.models.Domain || mongoose.model("Domain", DomainSchema)
+const UploadModel = mongoose.models.Upload || mongoose.model("Upload", UploadSchema)
+const MailAccount = mongoose.models.MailAccount || mongoose.model("MailAccount", MailAccountSchema)
+const Mail = mongoose.models.Mail || mongoose.model("Mail", MailSchema)
 const Subdomain = mongoose.models.Subdomain || mongoose.model("Subdomain", SubdomainSchema)
 const Project = mongoose.models.Project || mongoose.model("Project", ProjectSchema)
 const ProjectFile = mongoose.models.ProjectFile || mongoose.model("ProjectFile", ProjectFileSchema)
+
 // =========================
 // AUTH
 // =========================
@@ -1289,16 +1241,6 @@ app.get("/proxy", async (req, res) => {
   }
 })
 
-const SubdomainSchema = new mongoose.Schema({
-  domain: String,      // luciano.lbc
-  subdomain: String,   // blog
-  cname: { type: String, default: null },
-  mx: { type: String, default: null },
-  owner: String,
-  createdAt: { type: Date, default: Date.now }
-})
-SubdomainSchema.index({ domain: 1, subdomain: 1 }, { unique: true })
-
 // Crear subdominio
 app.post("/domains/sub", auth, async (req, res) => {
   try {
@@ -1393,21 +1335,6 @@ app.get("/resolve/sub/:subdomain.:domain", async (req, res) => {
     res.status(500).json({ error: e.message })
   }
 })
-
-const ProjectSchema = new mongoose.Schema({
-  id: { type: String, unique: true },
-  name: String,
-  owner: String,
-  createdAt: { type: Date, default: Date.now }
-})
-
-const ProjectFileSchema = new mongoose.Schema({
-  projectId: String,
-  path: String,        // "index.html", "about.html", "css/style.css"
-  compressed: Buffer,
-  updatedAt: { type: Date, default: Date.now }
-})
-ProjectFileSchema.index({ projectId: 1, path: 1 }, { unique: true })
 
 // Crear proyecto
 app.post("/projects", auth, async (req, res) => {
