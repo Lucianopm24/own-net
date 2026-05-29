@@ -164,38 +164,14 @@ new mongoose.Schema({
 
 })
 
-
-
-const User =
-mongoose.model(
-    "User",
-    UserSchema
-)
-
-const Domain =
-mongoose.model(
-    "Domain",
-    DomainSchema
-)
-
-const UploadModel =
-mongoose.model(
-    "Upload",
-    UploadSchema
-)
-
-const MailAccount =
-mongoose.model(
-    "MailAccount",
-    MailAccountSchema
-)
-
-const Mail =
-mongoose.model(
-    "Mail",
-    MailSchema
-)
-
+const User = mongoose.model("User", UserSchema)
+const Domain = mongoose.model("Domain", DomainSchema)
+const UploadModel = mongoose.model("Upload", UploadSchema)
+const MailAccount = mongoose.model("MailAccount", MailAccountSchema)
+const Mail = mongoose.model("Mail", MailSchema)
+const Subdomain = mongoose.models.Subdomain || mongoose.model("Subdomain", SubdomainSchema)
+const Project = mongoose.models.Project || mongoose.model("Project", ProjectSchema)
+const ProjectFile = mongoose.models.ProjectFile || mongoose.model("ProjectFile", ProjectFileSchema)
 // =========================
 // AUTH
 // =========================
@@ -1322,7 +1298,6 @@ const SubdomainSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 })
 SubdomainSchema.index({ domain: 1, subdomain: 1 }, { unique: true })
-const Subdomain = mongoose.model("Subdomain", SubdomainSchema)
 
 // Crear subdominio
 app.post("/domains/sub", auth, async (req, res) => {
@@ -1433,9 +1408,6 @@ const ProjectFileSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 })
 ProjectFileSchema.index({ projectId: 1, path: 1 }, { unique: true })
-
-const Project = mongoose.model("Project", ProjectSchema)
-const ProjectFile = mongoose.model("ProjectFile", ProjectFileSchema)
 
 // Crear proyecto
 app.post("/projects", auth, async (req, res) => {
