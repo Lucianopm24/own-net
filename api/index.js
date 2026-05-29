@@ -485,6 +485,8 @@ app.post(
                 ".green",
                 ".party",
                 ".lbc",
+                ".inn",
+                ".abc",
                 ".cc"
             ]
 
