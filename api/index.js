@@ -1485,6 +1485,37 @@ app.delete("/projects/:id/files/:path(*)", auth, async (req, res) => {
   }
 })
 
+app.post("/lucks/transfer", auth, async (req, res) => {
+  try {
+    const { to, amount } = req.body
+
+    if (!to || !amount || amount <= 0)
+      return res.status(400).json({ error: "Missing fields" })
+
+    if (to === req.user.username)
+      return res.status(400).json({ error: "Can't transfer to yourself" })
+
+    const sender = await User.findById(req.user.id)
+    const receiver = await User.findOne({ username: to })
+
+    if (!receiver)
+      return res.status(404).json({ error: "User not found" })
+
+    if (sender.lucks < amount)
+      return res.status(400).json({ error: "Not enough lucks" })
+
+    sender.lucks -= Number(amount)
+    receiver.lucks += Number(amount)
+
+    await sender.save()
+    await receiver.save()
+
+    res.json({ success: true, balance: sender.lucks })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // =========================
 // HEALTH
 // =========================
