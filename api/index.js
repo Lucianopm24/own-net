@@ -1290,6 +1290,300 @@ app.get(
 
 )
 
+const fetch = require("node-fetch")
+
+app.get("/proxy", async (req, res) => {
+  try {
+    const url = req.query.url
+    if (!url) return res.status(400).json({ error: "Missing url" })
+
+    // Solo permite URLs que sean CNAMEs registrados
+    const allDomains = await Domain.find({ cname: { $ne: null } })
+    const allowed = allDomains.some(d => url.startsWith(d.cname))
+    if (!allowed) return res.status(403).json({ error: "URL not allowed" })
+
+    const response = await fetch(url)
+    const html = await response.text()
+
+    res.setHeader("Content-Type", "text/html")
+    res.setHeader("X-Frame-Options", "SAMEORIGIN")
+    res.send(html)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+const SubdomainSchema = new mongoose.Schema({
+  domain: String,      // luciano.lbc
+  subdomain: String,   // blog
+  cname: { type: String, default: null },
+  mx: { type: String, default: null },
+  owner: String,
+  createdAt: { type: Date, default: Date.now }
+})
+SubdomainSchema.index({ domain: 1, subdomain: 1 }, { unique: true })
+const Subdomain = mongoose.model("Subdomain", SubdomainSchema)
+
+// Crear subdominio
+app.post("/domains/sub", auth, async (req, res) => {
+  try {
+    const { domain, subdomain, cname, mx } = req.body
+    if (!domain || !subdomain)
+      return res.status(400).json({ error: "Missing fields" })
+
+    const parentDomain = await Domain.findOne({ domain })
+    if (!parentDomain)
+      return res.status(404).json({ error: "Parent domain not found" })
+    if (parentDomain.owner !== req.user.username)
+      return res.status(403).json({ error: "Unauthorized" })
+
+    const exists = await Subdomain.findOne({ domain, subdomain })
+    if (exists)
+      return res.status(400).json({ error: "Subdomain already exists" })
+
+    const created = await Subdomain.create({
+      domain, subdomain,
+      cname: cname || null,
+      mx: mx || null,
+      owner: req.user.username
+    })
+    res.json(created)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Listar subdominios de un dominio
+app.get("/domains/:domain/subs", async (req, res) => {
+  try {
+    const subs = await Subdomain.find({ domain: req.params.domain })
+    res.json(subs)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Actualizar subdominio
+app.put("/domains/sub", auth, async (req, res) => {
+  try {
+    const { domain, subdomain, cname, mx } = req.body
+    const found = await Subdomain.findOne({ domain, subdomain })
+    if (!found)
+      return res.status(404).json({ error: "Subdomain not found" })
+    if (found.owner !== req.user.username)
+      return res.status(403).json({ error: "Unauthorized" })
+
+    if (cname !== undefined) found.cname = cname
+    if (mx !== undefined) found.mx = mx
+    await found.save()
+    res.json(found)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Eliminar subdominio
+app.delete("/domains/sub", auth, async (req, res) => {
+  try {
+    const { domain, subdomain } = req.body
+    const found = await Subdomain.findOne({ domain, subdomain })
+    if (!found)
+      return res.status(404).json({ error: "Subdomain not found" })
+    if (found.owner !== req.user.username)
+      return res.status(403).json({ error: "Unauthorized" })
+
+    await found.deleteOne()
+    res.json({ success: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Resolver subdominio
+app.get("/resolve/sub/:subdomain.:domain", async (req, res) => {
+  try {
+    const { subdomain, domain } = req.params
+    const found = await Subdomain.findOne({ domain, subdomain })
+    if (!found)
+      return res.status(404).json({ error: "Not found" })
+
+    res.json({
+      full: `${subdomain}.${domain}`,
+      domain, subdomain,
+      owner: found.owner,
+      cname: found.cname,
+      mx: found.mx
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+const ProjectSchema = new mongoose.Schema({
+  id: { type: String, unique: true },
+  name: String,
+  owner: String,
+  createdAt: { type: Date, default: Date.now }
+})
+
+const ProjectFileSchema = new mongoose.Schema({
+  projectId: String,
+  path: String,        // "index.html", "about.html", "css/style.css"
+  compressed: Buffer,
+  updatedAt: { type: Date, default: Date.now }
+})
+ProjectFileSchema.index({ projectId: 1, path: 1 }, { unique: true })
+
+const Project = mongoose.model("Project", ProjectSchema)
+const ProjectFile = mongoose.model("ProjectFile", ProjectFileSchema)
+
+// Crear proyecto
+app.post("/projects", auth, async (req, res) => {
+  try {
+    const { name } = req.body
+    if (!name) return res.status(400).json({ error: "Missing name" })
+
+    const id = uuidv4()
+    const project = await Project.create({
+      id, name, owner: req.user.username
+    })
+    res.json(project)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Listar proyectos del usuario
+app.get("/projects", auth, async (req, res) => {
+  try {
+    const projects = await Project.find({ owner: req.user.username })
+      .sort({ createdAt: -1 })
+    res.json(projects)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Subir/sobreescribir archivo en proyecto
+app.post("/projects/:id/files", auth, async (req, res) => {
+  try {
+    const { path: filePath, html } = req.body
+    if (!filePath || !html)
+      return res.status(400).json({ error: "Missing path or html" })
+
+    const project = await Project.findOne({ id: req.params.id })
+    if (!project)
+      return res.status(404).json({ error: "Project not found" })
+    if (project.owner !== req.user.username)
+      return res.status(403).json({ error: "Unauthorized" })
+
+    const compressed = zlib.gzipSync(Buffer.from(html))
+
+    await ProjectFile.findOneAndUpdate(
+      { projectId: req.params.id, path: filePath },
+      { compressed, updatedAt: new Date() },
+      { upsert: true, new: true }
+    )
+
+    res.json({
+      success: true,
+      url: `/projects/${req.params.id}/${filePath}`
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Listar archivos de un proyecto
+app.get("/projects/:id/files", auth, async (req, res) => {
+  try {
+    const project = await Project.findOne({ id: req.params.id })
+    if (!project)
+      return res.status(404).json({ error: "Project not found" })
+    if (project.owner !== req.user.username)
+      return res.status(403).json({ error: "Unauthorized" })
+
+    const files = await ProjectFile.find(
+      { projectId: req.params.id },
+      { path: 1, updatedAt: 1, _id: 0 }
+    )
+    res.json({ project, files })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Servir archivo de proyecto (público)
+app.get("/projects/:id/*", async (req, res) => {
+  try {
+    const filePath = req.params[0] || "index.html"
+    const file = await ProjectFile.findOne({
+      projectId: req.params.id,
+      path: filePath
+    })
+
+    if (!file) {
+      // Intentar index.html si la ruta no tiene extensión
+      const fallback = await ProjectFile.findOne({
+        projectId: req.params.id,
+        path: filePath.replace(/\/?$/, "/index.html").replace(/^\//, "")
+      })
+      if (!fallback) return res.status(404).send("Not found")
+      const html = zlib.gunzipSync(fallback.compressed)
+      res.setHeader("Content-Type", "text/html")
+      return res.send(html)
+    }
+
+    const decompressed = zlib.gunzipSync(file.compressed)
+    const ext = filePath.split(".").pop().toLowerCase()
+    const types = {
+      html: "text/html", css: "text/css",
+      js: "application/javascript", json: "application/json",
+      svg: "image/svg+xml", txt: "text/plain"
+    }
+    res.setHeader("Content-Type", types[ext] || "text/plain")
+    res.send(decompressed)
+  } catch (e) {
+    res.status(500).send(e.message)
+  }
+})
+
+// Eliminar proyecto completo
+app.delete("/projects/:id", auth, async (req, res) => {
+  try {
+    const project = await Project.findOne({ id: req.params.id })
+    if (!project)
+      return res.status(404).json({ error: "Project not found" })
+    if (project.owner !== req.user.username)
+      return res.status(403).json({ error: "Unauthorized" })
+
+    await ProjectFile.deleteMany({ projectId: req.params.id })
+    await project.deleteOne()
+    res.json({ success: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Eliminar archivo específico
+app.delete("/projects/:id/files/:path(*)", auth, async (req, res) => {
+  try {
+    const project = await Project.findOne({ id: req.params.id })
+    if (!project)
+      return res.status(404).json({ error: "Project not found" })
+    if (project.owner !== req.user.username)
+      return res.status(403).json({ error: "Unauthorized" })
+
+    await ProjectFile.deleteOne({
+      projectId: req.params.id,
+      path: req.params.path
+    })
+    res.json({ success: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // =========================
 // HEALTH
 // =========================
