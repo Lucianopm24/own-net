@@ -1516,6 +1516,11 @@ app.post("/lucks/transfer", auth, async (req, res) => {
   }
 })
 
+app.get("/domains/mine", auth, async (req, res) => {
+  const domains = await Domain.find({ owner: req.user.username }).sort({ createdAt: -1 });
+  res.json(domains);
+});
+
 // =========================
 // HEALTH
 // =========================
