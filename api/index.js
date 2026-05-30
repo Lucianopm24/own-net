@@ -66,7 +66,7 @@ const KVProjectSchema = new mongoose.Schema({
   extra: { type: Boolean, default: false }
 })
 
-onst EnvVarSchema = new mongoose.Schema({
+const EnvVarSchema = new mongoose.Schema({
   projectId: String,
   name: String,
   value: String,
