@@ -66,6 +66,14 @@ const KVProjectSchema = new mongoose.Schema({
   extra: { type: Boolean, default: false }
 })
 
+onst EnvVarSchema = new mongoose.Schema({
+  projectId: String,
+  name: String,
+  value: String,
+  owner: String,
+})
+EnvVarSchema.index({ projectId: 1, name: 1 }, { unique: true })
+
 const UserSchema = new mongoose.Schema({
     username: { type: String, unique: true },
     password: String,
@@ -140,6 +148,7 @@ const Project = mongoose.models.Project || mongoose.model("Project", ProjectSche
 const ProjectFile = mongoose.models.ProjectFile || mongoose.model("ProjectFile", ProjectFileSchema)
 const KV = mongoose.models.KV || mongoose.model("KV", KVSchema)
 const KVProject = mongoose.models.KVProject || mongoose.model("KVProject", KVProjectSchema)
+const EnvVar = mongoose.models.EnvVar || mongoose.model("EnvVar", EnvVarSchema)
 
 // =========================
 // AUTH
@@ -1590,6 +1599,76 @@ app.delete("/kv/:project/:key", async (req, res) => {
     return res.status(403).json({ error: "Unauthorized" })
   await KV.deleteOne({ project: req.params.project, key: req.params.key })
   res.json({ success: true })
+})
+
+// Crear/actualizar env var
+app.post("/projects/:id/env", auth, async (req, res) => {
+  try {
+    const { name, value } = req.body
+    const project = await Project.findOne({ id: req.params.id })
+    if (!project) return res.status(404).json({ error: "Project not found" })
+    if (project.owner !== req.user.username) return res.status(403).json({ error: "Unauthorized" })
+    await EnvVar.findOneAndUpdate(
+      { projectId: req.params.id, name },
+      { value, owner: req.user.username },
+      { upsert: true, new: true }
+    )
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Listar nombres (sin valores)
+app.get("/projects/:id/env", auth, async (req, res) => {
+  try {
+    const project = await Project.findOne({ id: req.params.id })
+    if (!project) return res.status(404).json({ error: "Project not found" })
+    if (project.owner !== req.user.username) return res.status(403).json({ error: "Unauthorized" })
+    const vars = await EnvVar.find({ projectId: req.params.id }, { name: 1, _id: 0 })
+    res.json(vars)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Borrar env var
+app.delete("/projects/:id/env/:name", auth, async (req, res) => {
+  try {
+    const project = await Project.findOne({ id: req.params.id })
+    if (!project) return res.status(404).json({ error: "Project not found" })
+    if (project.owner !== req.user.username) return res.status(403).json({ error: "Unauthorized" })
+    await EnvVar.deleteOne({ projectId: req.params.id, name: req.params.name })
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ENV PROXY — el corazón del sistema
+app.post("/env-proxy/:project/kv/:key", async (req, res) => {
+  try {
+    const { value } = req.body
+    const envName = req.headers["x-env"]
+    if (!envName) return res.status(400).json({ error: "Missing x-env header" })
+
+    // Busca la env var en la DB
+    const envVar = await EnvVar.findOne({ projectId: req.params.project, name: envName })
+    if (!envVar) return res.status(403).json({ error: "Env var not found" })
+
+    // Valida tamaño
+    const size = Buffer.byteLength(JSON.stringify(value))
+    const total = await KV.aggregate([
+      { $match: { project: req.params.project } },
+      { $group: { _id: null, total: { $sum: "$size" } } }
+    ])
+    const used = total[0]?.total || 0
+    const extra = await KVProject.findOne({ project: req.params.project })
+    const limit = extra?.extra ? 1024 * 1024 : 100 * 1024
+    if (used + size > limit) return res.status(400).json({ error: "Storage limit exceeded" })
+
+    // Hace la operación él mismo
+    await KV.findOneAndUpdate(
+      { project: req.params.project, key: req.params.key },
+      { value: JSON.stringify(value), size, owner: envVar.owner },
+      { upsert: true, new: true }
+    )
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
 // =========================
