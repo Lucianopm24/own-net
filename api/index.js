@@ -51,6 +51,21 @@ mongoose.connection.once(
 // MODELS
 // =========================
 
+const KVSchema = new mongoose.Schema({
+  project: String,
+  key: String,
+  value: String,
+  size: Number,
+  owner: String,
+  updatedAt: { type: Date, default: Date.now }
+})
+KVSchema.index({ project: 1, key: 1 }, { unique: true })
+
+const KVProjectSchema = new mongoose.Schema({
+  project: { type: String, unique: true },
+  extra: { type: Boolean, default: false }
+})
+
 const UserSchema = new mongoose.Schema({
     username: { type: String, unique: true },
     password: String,
@@ -123,6 +138,8 @@ const Mail = mongoose.models.Mail || mongoose.model("Mail", MailSchema)
 const Subdomain = mongoose.models.Subdomain || mongoose.model("Subdomain", SubdomainSchema)
 const Project = mongoose.models.Project || mongoose.model("Project", ProjectSchema)
 const ProjectFile = mongoose.models.ProjectFile || mongoose.model("ProjectFile", ProjectFileSchema)
+const KV = mongoose.models.KV || mongoose.model("KV", KVSchema)
+const KVProject = mongoose.models.KVProject || mongoose.model("KVProject", KVProjectSchema)
 
 // =========================
 // AUTH
@@ -1521,6 +1538,58 @@ app.post("/lucks/transfer", auth, async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
+})
+
+// GET /kv/:project/size — uso actual
+app.get("/kv/:project/size", async (req, res) => {
+  const total = await KV.aggregate([
+    { $match: { project: req.params.project } },
+    { $group: { _id: null, total: { $sum: "$size" } } }
+  ])
+  const extra = await KVProject.findOne({ project: req.params.project })
+  const limit = extra?.extra ? 1024 * 1024 : 100 * 1024
+  res.json({ used: total[0]?.total || 0, limit, unit: "bytes" })
+})
+
+// GET /kv/:project/:key — leer valor
+app.get("/kv/:project/:key", async (req, res) => {
+  const entry = await KV.findOne({ project: req.params.project, key: req.params.key })
+  if (!entry) return res.status(404).json({ error: "Not found" })
+  res.json({ key: entry.key, value: entry.value })
+})
+
+// POST /kv/:project/:key — escribir valor (auth)
+app.post("/kv/:project/:key", auth, async (req, res) => {
+  const { value } = req.body
+  const project = await Project.findOne({ id: req.params.project })
+  if (!project) return res.status(404).json({ error: "Project not found" })
+  if (project.owner !== req.user.username) return res.status(403).json({ error: "Unauthorized" })
+
+  const size = Buffer.byteLength(JSON.stringify(value))
+  const total = await KV.aggregate([
+    { $match: { project: req.params.project } },
+    { $group: { _id: null, total: { $sum: "$size" } } }
+  ])
+  const used = total[0]?.total || 0
+  const extra = await KVProject.findOne({ project: req.params.project })
+  const limit = extra?.extra ? 1024 * 1024 : 100 * 1024
+  if (used + size > limit) return res.status(400).json({ error: "Storage limit exceeded" })
+
+  await KV.findOneAndUpdate(
+    { project: req.params.project, key: req.params.key },
+    { value: JSON.stringify(value), size, owner: req.user.username },
+    { upsert: true, new: true }
+  )
+  res.json({ success: true })
+})
+
+// DELETE /kv/:project/:key — borrar valor (auth)
+app.delete("/kv/:project/:key", auth, async (req, res) => {
+  const project = await Project.findOne({ id: req.params.project })
+  if (!project) return res.status(404).json({ error: "Project not found" })
+  if (project.owner !== req.user.username) return res.status(403).json({ error: "Unauthorized" })
+  await KV.deleteOne({ project: req.params.project, key: req.params.key })
+  res.json({ success: true })
 })
 
 // =========================
