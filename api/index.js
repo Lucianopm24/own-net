@@ -1803,6 +1803,20 @@ app.post("/auth/change-password", auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+app.post("/pay/verify", async (req, res) => {
+  try {
+    const { code, projectId } = req.body
+    const entry = await OAuthCode.findOne({ code, projectId })
+    if (!entry) return res.status(403).json({ error: "Invalid code" })
+    if (entry.expiresAt < new Date()) {
+      await OAuthCode.deleteOne({ code })
+      return res.status(403).json({ error: "Code expired" })
+    }
+    await OAuthCode.deleteOne({ code })
+    res.json({ success: true, username: entry.username, amount: entry.scope })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // =========================
 // HEALTH
 // =========================
