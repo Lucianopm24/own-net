@@ -1791,6 +1791,18 @@ app.post("/pay/withdraw/:projectId", auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+app.post("/auth/change-password", auth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body
+    const user = await User.findOne({ username: req.user.username })
+    const valid = await bcrypt.compare(currentPassword, user.password)
+    if (!valid) return res.status(403).json({ error: "Wrong password" })
+    user.password = await bcrypt.hash(newPassword, 10)
+    await user.save()
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // =========================
 // HEALTH
 // =========================
