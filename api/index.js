@@ -1568,7 +1568,7 @@ app.get("/kv/:project/:key", async (req, res) => {
 })
 
 // POST /kv/:project/:key — escribir valor
-app.post("/kv/:project/:key", async (req, res) => {
+app.post("/kv/:project/:key", auth, async (req, res) => {
   const { value } = req.body
   const project = await Project.findOne({ id: req.params.project })
   if (!project) return res.status(404).json({ error: "Project not found" })
@@ -1591,12 +1591,10 @@ app.post("/kv/:project/:key", async (req, res) => {
   res.json({ success: true })
 })
 
-app.delete("/kv/:project/:key", async (req, res) => {
-  const referer = req.headers.referer || ""
+app.delete("/kv/:project/:key", auth, async (req, res) => {
   const project = await Project.findOne({ id: req.params.project })
   if (!project) return res.status(404).json({ error: "Project not found" })
-  if (!referer.includes(`/projects/${req.params.project}`))
-    return res.status(403).json({ error: "Unauthorized" })
+  if (project.owner !== req.user.username) return res.status(403).json({ error: "Unauthorized" })
   await KV.deleteOne({ project: req.params.project, key: req.params.key })
   res.json({ success: true })
 })
