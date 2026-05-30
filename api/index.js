@@ -51,6 +51,23 @@ mongoose.connection.once(
 // MODELS
 // =========================
 
+const OAuthCodeSchema = new mongoose.Schema({
+  code: { type: String, unique: true },
+  projectId: String,
+  username: String,
+  scope: String,
+  redirect: String,
+  expiresAt: { type: Date, default: () => new Date(Date.now() + 5 * 60 * 1000) }
+})
+
+const OAuthTokenSchema = new mongoose.Schema({
+  token: { type: String, unique: true },
+  projectId: String,
+  username: String,
+  scope: String,
+  createdAt: { type: Date, default: Date.now }
+})
+
 const KVSchema = new mongoose.Schema({
   project: String,
   key: String,
@@ -148,7 +165,9 @@ const Project = mongoose.models.Project || mongoose.model("Project", ProjectSche
 const ProjectFile = mongoose.models.ProjectFile || mongoose.model("ProjectFile", ProjectFileSchema)
 const KV = mongoose.models.KV || mongoose.model("KV", KVSchema)
 const KVProject = mongoose.models.KVProject || mongoose.model("KVProject", KVProjectSchema)
+const OAuthCode = mongoose.models.OAuthCode || mongoose.model("OAuthCode", OAuthCodeSchema)
 const EnvVar = mongoose.models.EnvVar || mongoose.model("EnvVar", EnvVarSchema)
+const OAuthToken = mongoose.models.OAuthToken || mongoose.model("OAuthToken", OAuthTokenSchema)
 
 // =========================
 // AUTH
@@ -1666,6 +1685,109 @@ app.post("/env-proxy/:project/kv/:key", async (req, res) => {
       { upsert: true, new: true }
     )
     res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// OAUTH
+app.post("/oauth/authorize", auth, async (req, res) => {
+  try {
+    const { projectId, redirect, scope } = req.body
+    const project = await Project.findOne({ id: projectId })
+    if (!project) return res.status(404).json({ error: "App not found" })
+    const code = uuidv4()
+    await OAuthCode.create({ code, projectId, username: req.user.username, scope, redirect })
+    res.json({ code, redirect })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post("/oauth/token", async (req, res) => {
+  try {
+    const { code, projectId } = req.body
+    const entry = await OAuthCode.findOne({ code, projectId })
+    if (!entry) return res.status(403).json({ error: "Invalid code" })
+    if (entry.expiresAt < new Date()) {
+      await OAuthCode.deleteOne({ code })
+      return res.status(403).json({ error: "Code expired" })
+    }
+    const token = uuidv4()
+    await OAuthToken.create({ token, projectId, username: entry.username, scope: entry.scope })
+    await OAuthCode.deleteOne({ code })
+    res.json({ token, username: entry.username, scope: entry.scope })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get("/oauth/me", async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace("Bearer ", "")
+    if (!token) return res.status(401).json({ error: "No token" })
+    const entry = await OAuthToken.findOne({ token })
+    if (!entry) return res.status(403).json({ error: "Invalid token" })
+    const user = await User.findOne({ username: entry.username }, { password: 0 })
+    res.json({ username: user.username, scope: entry.scope })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post("/oauth/revoke", async (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace("Bearer ", "")
+    await OAuthToken.deleteOne({ token })
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// PAY
+app.post("/pay/request", auth, async (req, res) => {
+  try {
+    const { projectId, amount, reason } = req.body
+    const project = await Project.findOne({ id: projectId })
+    if (!project) return res.status(404).json({ error: "App not found" })
+    const user = await User.findOne({ username: req.user.username })
+    if (user.lucks < amount) return res.status(400).json({ error: "Insufficient funds" })
+    res.json({ approved: false, message: "Pending user confirmation" })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post("/pay/confirm", auth, async (req, res) => {
+  try {
+    const { projectId, amount } = req.body
+    const project = await Project.findOne({ id: projectId })
+    if (!project) return res.status(404).json({ error: "App not found" })
+    const sender = await User.findOne({ username: req.user.username })
+    if (sender.lucks < amount) return res.status(400).json({ error: "Insufficient funds" })
+    const receiverUsername = `PROJECT_${projectId}`
+    await User.findOneAndUpdate({ username: req.user.username }, { $inc: { lucks: -amount } })
+    await User.findOneAndUpdate(
+      { username: receiverUsername },
+      { $inc: { lucks: amount } },
+      { upsert: true, setOnInsert: { username: receiverUsername, password: uuidv4(), lucks: 0 } }
+    )
+    res.json({ success: true, paid: amount })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Saldo de una app (solo el owner)
+app.get("/pay/balance/:projectId", auth, async (req, res) => {
+  try {
+    const project = await Project.findOne({ id: req.params.projectId })
+    if (!project) return res.status(404).json({ error: "App not found" })
+    if (project.owner !== req.user.username) return res.status(403).json({ error: "Unauthorized" })
+    const account = await User.findOne({ username: `PROJECT_${req.params.projectId}` })
+    res.json({ balance: account?.lucks || 0 })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Retirar lucks de una app a tu cuenta
+app.post("/pay/withdraw/:projectId", auth, async (req, res) => {
+  try {
+    const { amount } = req.body
+    const project = await Project.findOne({ id: req.params.projectId })
+    if (!project) return res.status(404).json({ error: "App not found" })
+    if (project.owner !== req.user.username) return res.status(403).json({ error: "Unauthorized" })
+    const appAccount = await User.findOne({ username: `PROJECT_${req.params.projectId}` })
+    if (!appAccount || appAccount.lucks < amount) return res.status(400).json({ error: "Insufficient funds" })
+    await User.findOneAndUpdate({ username: `PROJECT_${req.params.projectId}` }, { $inc: { lucks: -amount } })
+    await User.findOneAndUpdate({ username: req.user.username }, { $inc: { lucks: amount } })
+    res.json({ success: true, withdrawn: amount })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
