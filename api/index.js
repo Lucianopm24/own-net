@@ -711,6 +711,15 @@ app.get(
 
 )
 
+app.get("/domains/mine", auth, async (req, res) => {
+  try {
+    const domains = await Domain.find({ owner: req.user.username }).sort({ createdAt: -1 })
+    res.json(domains)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // =========================
 // SEARCH ENGINE
 // =========================
@@ -1515,11 +1524,6 @@ app.post("/lucks/transfer", auth, async (req, res) => {
     res.status(500).json({ error: e.message })
   }
 })
-
-app.get("/domains/mine", auth, async (req, res) => {
-  const domains = await Domain.find({ owner: req.user.username }).sort({ createdAt: -1 });
-  res.json(domains);
-});
 
 // =========================
 // HEALTH
