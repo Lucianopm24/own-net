@@ -1561,13 +1561,8 @@ app.get("/kv/:project/:key", async (req, res) => {
 // POST /kv/:project/:key — escribir valor
 app.post("/kv/:project/:key", async (req, res) => {
   const { value } = req.body
-  const referer = req.headers.referer || ""
   const project = await Project.findOne({ id: req.params.project })
   if (!project) return res.status(404).json({ error: "Project not found" })
-  
-  // Valida que viene del proyecto correcto
-  if (!referer.includes(`/projects/${req.params.project}`))
-    return res.status(403).json({ error: "Unauthorized" })
 
   const size = Buffer.byteLength(JSON.stringify(value))
   const total = await KV.aggregate([
