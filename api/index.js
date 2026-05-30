@@ -1558,12 +1558,16 @@ app.get("/kv/:project/:key", async (req, res) => {
   res.json({ key: entry.key, value: entry.value })
 })
 
-// POST /kv/:project/:key — escribir valor (auth)
-app.post("/kv/:project/:key", auth, async (req, res) => {
+// POST /kv/:project/:key — escribir valor
+app.post("/kv/:project/:key", async (req, res) => {
   const { value } = req.body
+  const referer = req.headers.referer || ""
   const project = await Project.findOne({ id: req.params.project })
   if (!project) return res.status(404).json({ error: "Project not found" })
-  if (project.owner !== req.user.username) return res.status(403).json({ error: "Unauthorized" })
+  
+  // Valida que viene del proyecto correcto
+  if (!referer.includes(`/projects/${req.params.project}`))
+    return res.status(403).json({ error: "Unauthorized" })
 
   const size = Buffer.byteLength(JSON.stringify(value))
   const total = await KV.aggregate([
@@ -1577,17 +1581,18 @@ app.post("/kv/:project/:key", auth, async (req, res) => {
 
   await KV.findOneAndUpdate(
     { project: req.params.project, key: req.params.key },
-    { value: JSON.stringify(value), size, owner: req.user.username },
+    { value: JSON.stringify(value), size, owner: project.owner },
     { upsert: true, new: true }
   )
   res.json({ success: true })
 })
 
-// DELETE /kv/:project/:key — borrar valor (auth)
-app.delete("/kv/:project/:key", auth, async (req, res) => {
+app.delete("/kv/:project/:key", async (req, res) => {
+  const referer = req.headers.referer || ""
   const project = await Project.findOne({ id: req.params.project })
   if (!project) return res.status(404).json({ error: "Project not found" })
-  if (project.owner !== req.user.username) return res.status(403).json({ error: "Unauthorized" })
+  if (!referer.includes(`/projects/${req.params.project}`))
+    return res.status(403).json({ error: "Unauthorized" })
   await KV.deleteOne({ project: req.params.project, key: req.params.key })
   res.json({ success: true })
 })
