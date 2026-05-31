@@ -60,6 +60,20 @@ const OAuthCodeSchema = new mongoose.Schema({
   expiresAt: { type: Date, default: () => new Date(Date.now() + 5 * 60 * 1000) }
 })
 
+const AdViewSchema = new mongoose.Schema({
+  ip: String,
+  targetUser: String,
+  type: String,
+  date: String,
+  code: { type: String, default: null }
+})
+AdViewSchema.index({ ip: 1, targetUser: 1, type: 1, date: 1 })
+
+const AdConfigSchema = new mongoose.Schema({
+  key: { type: String, unique: true },
+  value: Number
+})
+
 const OAuthTokenSchema = new mongoose.Schema({
   token: { type: String, unique: true },
   projectId: String,
@@ -169,6 +183,8 @@ const KVProject = mongoose.models.KVProject || mongoose.model("KVProject", KVPro
 const OAuthCode = mongoose.models.OAuthCode || mongoose.model("OAuthCode", OAuthCodeSchema)
 const EnvVar = mongoose.models.EnvVar || mongoose.model("EnvVar", EnvVarSchema)
 const OAuthToken = mongoose.models.OAuthToken || mongoose.model("OAuthToken", OAuthTokenSchema)
+const AdView = mongoose.models.AdView || mongoose.model("AdView", AdViewSchema)
+const AdConfig = mongoose.models.AdConfig || mongoose.model("AdConfig", AdConfigSchema)
 
 // =========================
 // AUTH
@@ -1830,6 +1846,89 @@ app.post("/domains/ssl", auth, async (req, res) => {
     found.ssl = ssl
     await found.save()
     res.json(found)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ADS
+function getToday() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+app.post("/ads/view", async (req, res) => {
+  try {
+    const { targetUser } = req.body
+    const ip = req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress
+    if (!targetUser) return res.status(400).json({ error: "Missing targetUser" })
+
+    const user = await User.findOne({ username: targetUser })
+    if (!user) return res.status(404).json({ error: "User not found" })
+
+    const today = getToday()
+    const existing = await AdView.findOne({ ip, targetUser, type: "banner", date: today })
+    if (existing) return res.json({ paid: false, reason: "Already viewed today" })
+
+    const rateDoc = await AdConfig.findOne({ key: "banner_rate" })
+    const rate = rateDoc?.value ?? 0.5
+
+    await AdView.create({ ip, targetUser, type: "banner", date: today })
+    await User.findOneAndUpdate({ username: targetUser }, { $inc: { lucks: rate } })
+
+    res.json({ paid: true, amount: rate })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post("/ads/rewarded", async (req, res) => {
+  try {
+    const { targetUser, redirectUri } = req.body
+    const ip = req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress
+    if (!targetUser) return res.status(400).json({ error: "Missing targetUser" })
+
+    const user = await User.findOne({ username: targetUser })
+    if (!user) return res.status(404).json({ error: "User not found" })
+
+    const today = getToday()
+    const count = await AdView.countDocuments({ ip, targetUser, type: "rewarded", date: today })
+    if (count >= 100) return res.json({ paid: false, reason: "Daily limit reached" })
+
+    const rateDoc = await AdConfig.findOne({ key: "rewarded_rate" })
+    const rate = rateDoc?.value ?? 0.75
+
+    const code = uuidv4()
+    await AdView.create({ ip, targetUser, type: "rewarded", date: today, code })
+    await User.findOneAndUpdate({ username: targetUser }, { $inc: { lucks: rate } })
+
+    res.json({ paid: true, amount: rate, code, redirectUri })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get("/ads/validate/:code", async (req, res) => {
+  try {
+    const view = await AdView.findOne({ code: req.params.code })
+    if (!view) return res.status(404).json({ valid: false })
+    res.json({ valid: true, targetUser: view.targetUser, date: view.date })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get("/ads/config", async (req, res) => {
+  try {
+    const banner = await AdConfig.findOne({ key: "banner_rate" })
+    const rewarded = await AdConfig.findOne({ key: "rewarded_rate" })
+    res.json({
+      banner_rate: banner?.value ?? 0.5,
+      rewarded_rate: rewarded?.value ?? 0.75
+    })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post("/ads/config", auth, async (req, res) => {
+  try {
+    if (req.user.username !== "Luciano") return res.status(403).json({ error: "Unauthorized" })
+    const { banner_rate, rewarded_rate } = req.body
+    if (banner_rate !== undefined)
+      await AdConfig.findOneAndUpdate({ key: "banner_rate" }, { value: banner_rate }, { upsert: true })
+    if (rewarded_rate !== undefined)
+      await AdConfig.findOneAndUpdate({ key: "rewarded_rate" }, { value: rewarded_rate }, { upsert: true })
+    res.json({ success: true })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
