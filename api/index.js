@@ -74,6 +74,23 @@ const AdConfigSchema = new mongoose.Schema({
   value: Number
 })
 
+const AdAccountSchema = new mongoose.Schema({
+  username: { type: String, unique: true },
+  balance: { type: Number, default: 0 }
+})
+
+const AdSchema = new mongoose.Schema({
+  id: { type: String, unique: true },
+  owner: String,
+  type: { type: String, enum: ["text", "image", "video", "link"] },
+  content: String,
+  title: String,
+  budget: Number,
+  spent: { type: Number, default: 0 },
+  status: { type: String, enum: ["active", "paused", "depleted"], default: "active" },
+  createdAt: { type: Date, default: Date.now }
+})
+
 const OAuthTokenSchema = new mongoose.Schema({
   token: { type: String, unique: true },
   projectId: String,
@@ -185,6 +202,8 @@ const EnvVar = mongoose.models.EnvVar || mongoose.model("EnvVar", EnvVarSchema)
 const OAuthToken = mongoose.models.OAuthToken || mongoose.model("OAuthToken", OAuthTokenSchema)
 const AdView = mongoose.models.AdView || mongoose.model("AdView", AdViewSchema)
 const AdConfig = mongoose.models.AdConfig || mongoose.model("AdConfig", AdConfigSchema)
+const AdAccount = mongoose.models.AdAccount || mongoose.model("AdAccount", AdAccountSchema)
+const Ad = mongoose.models.Ad || mongoose.model("Ad", AdSchema)
 
 // =========================
 // AUTH
@@ -1854,11 +1873,118 @@ function getToday() {
   return new Date().toISOString().slice(0, 10)
 }
 
+// Depositar Lucks a cuenta de ads
+app.post("/ads/deposit", auth, async (req, res) => {
+  try {
+    const { amount } = req.body
+    if (!amount || amount <= 0) return res.status(400).json({ error: "Invalid amount" })
+    const user = await User.findOne({ username: req.user.username })
+    if (!user || user.lucks < amount) return res.status(400).json({ error: "Insufficient funds" })
+    user.lucks -= amount
+    await user.save()
+    await AdAccount.findOneAndUpdate(
+      { username: req.user.username },
+      { $inc: { balance: amount } },
+      { upsert: true, new: true }
+    )
+    res.json({ success: true, deposited: amount })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Ver balance de ads
+app.get("/ads/account", auth, async (req, res) => {
+  try {
+    const account = await AdAccount.findOne({ username: req.user.username })
+    res.json({ balance: account?.balance || 0 })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Crear anuncio
+app.post("/ads/create", auth, async (req, res) => {
+  try {
+    const { type, content, title, budget } = req.body
+    if (!type || !content || !budget || !title)
+      return res.status(400).json({ error: "Missing fields" })
+    if (!["text", "image", "video", "link"].includes(type))
+      return res.status(400).json({ error: "Invalid type" })
+    const account = await AdAccount.findOne({ username: req.user.username })
+    if (!account || account.balance < budget)
+      return res.status(400).json({ error: "Insufficient ad balance" })
+    account.balance -= budget
+    await account.save()
+    const ad = await Ad.create({
+      id: uuidv4(), owner: req.user.username,
+      type, content, title, budget, spent: 0, status: "active"
+    })
+    res.json(ad)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Listar mis anuncios
+app.get("/ads/mine", auth, async (req, res) => {
+  try {
+    const ads = await Ad.find({ owner: req.user.username }).sort({ createdAt: -1 })
+    res.json(ads)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Pausar/reanudar anuncio
+app.post("/ads/pause/:id", auth, async (req, res) => {
+  try {
+    const ad = await Ad.findOne({ id: req.params.id })
+    if (!ad) return res.status(404).json({ error: "Ad not found" })
+    if (ad.owner !== req.user.username) return res.status(403).json({ error: "Unauthorized" })
+    if (ad.status === "depleted") return res.status(400).json({ error: "Ad is depleted" })
+    ad.status = ad.status === "active" ? "paused" : "active"
+    await ad.save()
+    res.json({ success: true, status: ad.status })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Borrar anuncio
+app.delete("/ads/delete/:id", auth, async (req, res) => {
+  try {
+    const ad = await Ad.findOne({ id: req.params.id })
+    if (!ad) return res.status(404).json({ error: "Ad not found" })
+    if (ad.owner !== req.user.username && req.user.username !== "Luciano")
+      return res.status(403).json({ error: "Unauthorized" })
+    // Devolver presupuesto restante
+    const remaining = ad.budget - ad.spent
+    if (remaining > 0) {
+      await AdAccount.findOneAndUpdate(
+        { username: ad.owner },
+        { $inc: { balance: remaining } },
+        { upsert: true }
+      )
+    }
+    await ad.deleteOne()
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Servir anuncio aleatorio activo
+app.get("/ads/serve", async (req, res) => {
+  try {
+    const type = req.query.type || null
+    const query = { status: "active" }
+    if (type) query.type = type
+    const count = await Ad.countDocuments(query)
+    if (!count) return res.status(404).json({ error: "No ads available" })
+    const random = Math.floor(Math.random() * count)
+    const ad = await Ad.findOne(query).skip(random)
+    res.json({ id: ad.id, type: ad.type, content: ad.content, title: ad.title })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Ver banner — paga al owner del anuncio
 app.post("/ads/view", async (req, res) => {
   try {
-    const { targetUser } = req.body
+    const { adId, targetUser } = req.body
     const ip = req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress
-    if (!targetUser) return res.status(400).json({ error: "Missing targetUser" })
+    if (!adId || !targetUser) return res.status(400).json({ error: "Missing fields" })
+
+    const ad = await Ad.findOne({ id: adId, status: "active" })
+    if (!ad) return res.json({ paid: false, reason: "Ad not active" })
 
     const user = await User.findOne({ username: targetUser })
     if (!user) return res.status(404).json({ error: "User not found" })
@@ -1870,18 +1996,31 @@ app.post("/ads/view", async (req, res) => {
     const rateDoc = await AdConfig.findOne({ key: "banner_rate" })
     const rate = rateDoc?.value ?? 0.5
 
+    if (ad.spent + rate > ad.budget) {
+      ad.status = "depleted"
+      await ad.save()
+      return res.json({ paid: false, reason: "Ad depleted" })
+    }
+
     await AdView.create({ ip, targetUser, type: "banner", date: today })
+    ad.spent += rate
+    if (ad.spent >= ad.budget) ad.status = "depleted"
+    await ad.save()
     await User.findOneAndUpdate({ username: targetUser }, { $inc: { lucks: rate } })
 
     res.json({ paid: true, amount: rate })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// Ver rewarded — paga al targetUser con código de validación
 app.post("/ads/rewarded", async (req, res) => {
   try {
-    const { targetUser, redirectUri } = req.body
+    const { adId, targetUser, redirectUri } = req.body
     const ip = req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress
-    if (!targetUser) return res.status(400).json({ error: "Missing targetUser" })
+    if (!adId || !targetUser) return res.status(400).json({ error: "Missing fields" })
+
+    const ad = await Ad.findOne({ id: adId, status: "active" })
+    if (!ad) return res.json({ paid: false, reason: "Ad not active" })
 
     const user = await User.findOne({ username: targetUser })
     if (!user) return res.status(404).json({ error: "User not found" })
@@ -1893,14 +2032,24 @@ app.post("/ads/rewarded", async (req, res) => {
     const rateDoc = await AdConfig.findOne({ key: "rewarded_rate" })
     const rate = rateDoc?.value ?? 0.75
 
+    if (ad.spent + rate > ad.budget) {
+      ad.status = "depleted"
+      await ad.save()
+      return res.json({ paid: false, reason: "Ad depleted" })
+    }
+
     const code = uuidv4()
     await AdView.create({ ip, targetUser, type: "rewarded", date: today, code })
+    ad.spent += rate
+    if (ad.spent >= ad.budget) ad.status = "depleted"
+    await ad.save()
     await User.findOneAndUpdate({ username: targetUser }, { $inc: { lucks: rate } })
 
     res.json({ paid: true, amount: rate, code, redirectUri })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// Validar código rewarded
 app.get("/ads/validate/:code", async (req, res) => {
   try {
     const view = await AdView.findOne({ code: req.params.code })
@@ -1909,14 +2058,12 @@ app.get("/ads/validate/:code", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// Ver/cambiar config (solo Luciano)
 app.get("/ads/config", async (req, res) => {
   try {
     const banner = await AdConfig.findOne({ key: "banner_rate" })
     const rewarded = await AdConfig.findOne({ key: "rewarded_rate" })
-    res.json({
-      banner_rate: banner?.value ?? 0.5,
-      rewarded_rate: rewarded?.value ?? 0.75
-    })
+    res.json({ banner_rate: banner?.value ?? 0.5, rewarded_rate: rewarded?.value ?? 0.75 })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
