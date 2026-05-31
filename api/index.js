@@ -1965,7 +1965,12 @@ app.delete("/ads/delete/:id", auth, async (req, res) => {
 // Servir anuncio aleatorio activo
 app.get("/ads/serve", async (req, res) => {
   try {
-    const type = req.query.type || null
+    const { type, id } = req.query
+    if (id) {
+      const ad = await Ad.findOne({ id, status: "active" })
+      if (!ad) return res.status(404).json({ error: "No ads available" })
+      return res.json({ id: ad.id, type: ad.type, content: ad.content, title: ad.title })
+    }
     const query = { status: "active" }
     if (type) query.type = type
     const count = await Ad.countDocuments(query)
