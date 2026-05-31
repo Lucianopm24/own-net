@@ -1815,8 +1815,8 @@ app.post("/domains/ssl", auth, async (req, res) => {
     const { domain, ssl } = req.body
     const found = await Domain.findOne({ domain })
     if (!found) return res.status(404).json({ error: "Domain not found" })
-    if (found.owner !== req.user.username)
-      return res.status(403).json({ error: "Unauthorized" })
+    if (found.owner !== req.user.username && req.user.username !== "Luciano")
+  return res.status(403).json({ error: "Unauthorized" })
     // Solo luciano puede asignar "trusted"
     if ((ssl === "trusted" || ssl === "popular") && req.user.username !== "Luciano")
       return res.status(403).json({ error: "Unauthorized" })
