@@ -2084,6 +2084,43 @@ app.post("/adnet/config", auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// TELEGRAM UPLOAD
+app.post("/telegram/upload", async (req, res) => {
+  try {
+    const { base64, filename } = req.body
+    if (!base64) return res.status(400).json({ error: "Missing image" })
+    
+    const token = process.env.TG_BOT_TOKEN
+    const chatId = process.env.TG_CHAT_ID
+    
+    const buffer = Buffer.from(base64, "base64")
+    if (buffer.length > 4.5 * 1024 * 1024)
+      return res.status(400).json({ error: "File too large (max 4.5MB)" })
+    
+    const FormData = require("form-data")
+    const form = new FormData()
+    form.append("chat_id", chatId)
+    form.append("photo", buffer, { filename: filename || "image.jpg" })
+    
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+      method: "POST",
+      body: form,
+      headers: form.getHeaders()
+    })
+    const d = await r.json()
+    if (!d.ok) return res.status(500).json({ error: d.description })
+    
+    const fileId = d.result.photo.at(-1).file_id
+    const r2 = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`)
+    const d2 = await r2.json()
+    const url = `https://api.telegram.org/file/bot${token}/${d2.result.file_path}`
+    
+    res.json({ success: true, url })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // =========================
 // HEALTH
 // =========================
