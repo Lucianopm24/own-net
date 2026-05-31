@@ -103,6 +103,7 @@ const DomainSchema = new mongoose.Schema({
     owner: String,
     cname: { type: String, default: null },
     mx: { type: String, default: null },
+    ssl: { type: String, enum: [null, "self", "popular", "trusted"], default: null },
     createdAt: { type: Date, default: Date.now }
 })
 
@@ -1243,20 +1244,12 @@ app.get(
                 })
 
             res.json({
-
-                domain:
-                    found.domain,
-
-                owner:
-                    found.owner,
-
-                cname:
-                    found.cname,
-
-                mx:
-                    found.mx
-
-            })
+            domain: found.domain,
+            owner: found.owner,
+            cname: found.cname,
+            mx: found.mx,
+            ssl: found.ssl || null
+        })
 
         } catch (e) {
 
@@ -1814,6 +1807,22 @@ app.post("/pay/verify", async (req, res) => {
     }
     await OAuthCode.deleteOne({ code })
     res.json({ success: true, username: entry.username, amount: entry.scope })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post("/domains/ssl", auth, async (req, res) => {
+  try {
+    const { domain, ssl } = req.body
+    const found = await Domain.findOne({ domain })
+    if (!found) return res.status(404).json({ error: "Domain not found" })
+    if (found.owner !== req.user.username)
+      return res.status(403).json({ error: "Unauthorized" })
+    const valid = [null, "self", "popular", "trusted"]
+    if (!valid.includes(ssl))
+      return res.status(400).json({ error: "Invalid ssl value" })
+    found.ssl = ssl
+    await found.save()
+    res.json(found)
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
