@@ -1874,7 +1874,7 @@ function getToday() {
 }
 
 // Depositar Lucks a cuenta de ads
-app.post("/ads/deposit", auth, async (req, res) => {
+app.post("/adnet/deposit", auth, async (req, res) => {
   try {
     const { amount } = req.body
     if (!amount || amount <= 0) return res.status(400).json({ error: "Invalid amount" })
@@ -1892,7 +1892,7 @@ app.post("/ads/deposit", auth, async (req, res) => {
 })
 
 // Ver balance de ads
-app.get("/ads/account", auth, async (req, res) => {
+app.get("/adnet/account", auth, async (req, res) => {
   try {
     const account = await AdAccount.findOne({ username: req.user.username })
     res.json({ balance: account?.balance || 0 })
@@ -1900,7 +1900,7 @@ app.get("/ads/account", auth, async (req, res) => {
 })
 
 // Crear anuncio
-app.post("/ads/create", auth, async (req, res) => {
+app.post("/adnet/create", auth, async (req, res) => {
   try {
     const { type, content, title, budget } = req.body
     if (!type || !content || !budget || !title)
@@ -1921,7 +1921,7 @@ app.post("/ads/create", auth, async (req, res) => {
 })
 
 // Listar mis anuncios
-app.get("/ads/mine", auth, async (req, res) => {
+app.get("/adnet/mine", auth, async (req, res) => {
   try {
     const ads = await Ad.find({ owner: req.user.username }).sort({ createdAt: -1 })
     res.json(ads)
@@ -1929,7 +1929,7 @@ app.get("/ads/mine", auth, async (req, res) => {
 })
 
 // Pausar/reanudar anuncio
-app.post("/ads/pause/:id", auth, async (req, res) => {
+app.post("/adnet/pause/:id", auth, async (req, res) => {
   try {
     const ad = await Ad.findOne({ id: req.params.id })
     if (!ad) return res.status(404).json({ error: "Ad not found" })
@@ -1942,7 +1942,7 @@ app.post("/ads/pause/:id", auth, async (req, res) => {
 })
 
 // Borrar anuncio
-app.delete("/ads/delete/:id", auth, async (req, res) => {
+app.delete("/adnet/delete/:id", auth, async (req, res) => {
   try {
     const ad = await Ad.findOne({ id: req.params.id })
     if (!ad) return res.status(404).json({ error: "Ad not found" })
@@ -1963,7 +1963,7 @@ app.delete("/ads/delete/:id", auth, async (req, res) => {
 })
 
 // Servir anuncio aleatorio activo
-app.get("/ads/serve", async (req, res) => {
+app.get("/adnet/serve", async (req, res) => {
   try {
     const { type, id } = req.query
     if (id) {
@@ -1982,7 +1982,7 @@ app.get("/ads/serve", async (req, res) => {
 })
 
 // Ver banner — paga al owner del anuncio
-app.post("/ads/view", async (req, res) => {
+app.post("/adnet/view", async (req, res) => {
   try {
     const { adId, targetUser } = req.body
     const ip = req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress
@@ -2018,7 +2018,7 @@ app.post("/ads/view", async (req, res) => {
 })
 
 // Ver rewarded — paga al targetUser con código de validación
-app.post("/ads/rewarded", async (req, res) => {
+app.post("/adnet/rewarded", async (req, res) => {
   try {
     const { adId, targetUser, redirectUri } = req.body
     const ip = req.headers["x-forwarded-for"]?.split(",")[0] || req.socket.remoteAddress
@@ -2055,7 +2055,7 @@ app.post("/ads/rewarded", async (req, res) => {
 })
 
 // Validar código rewarded
-app.get("/ads/validate/:code", async (req, res) => {
+app.get("/adnet/validate/:code", async (req, res) => {
   try {
     const view = await AdView.findOne({ code: req.params.code })
     if (!view) return res.status(404).json({ valid: false })
@@ -2064,7 +2064,7 @@ app.get("/ads/validate/:code", async (req, res) => {
 })
 
 // Ver/cambiar config (solo Luciano)
-app.get("/ads/config", async (req, res) => {
+app.get("/adnet/config", async (req, res) => {
   try {
     const banner = await AdConfig.findOne({ key: "banner_rate" })
     const rewarded = await AdConfig.findOne({ key: "rewarded_rate" })
@@ -2072,7 +2072,7 @@ app.get("/ads/config", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
-app.post("/ads/config", auth, async (req, res) => {
+app.post("/adnet/config", auth, async (req, res) => {
   try {
     if (req.user.username !== "Luciano") return res.status(403).json({ error: "Unauthorized" })
     const { banner_rate, rewarded_rate } = req.body
