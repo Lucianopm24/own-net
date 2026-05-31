@@ -1469,16 +1469,20 @@ app.get("/projects/:id/*", async (req, res) => {
     })
 
     if (!file) {
-      // Intentar index.html si la ruta no tiene extensión
-      const fallback = await ProjectFile.findOne({
-        projectId: req.params.id,
-        path: filePath.replace(/\/?$/, "/index.html").replace(/^\//, "")
-      })
-      if (!fallback) return res.status(404).send("Not found")
-      const html = zlib.gunzipSync(fallback.compressed)
-      res.setHeader("Content-Type", "text/html")
-      return res.send(html)
-    }
+  const f404 = await ProjectFile.findOne({ projectId: req.params.id, path: "404.html" })
+  if (f404) {
+    const html = zlib.gunzipSync(f404.compressed)
+    res.setHeader("Content-Type", "text/html")
+    return res.send(html)
+  }
+  const fIndex = await ProjectFile.findOne({ projectId: req.params.id, path: "index.html" })
+  if (fIndex) {
+    const html = zlib.gunzipSync(fIndex.compressed)
+    res.setHeader("Content-Type", "text/html")
+    return res.send(html)
+  }
+  return res.status(404).send("Not found")
+}
 
     const decompressed = zlib.gunzipSync(file.compressed)
     const ext = filePath.split(".").pop().toLowerCase()
