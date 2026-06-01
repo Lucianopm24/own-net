@@ -2287,7 +2287,12 @@ app.post("/luxer/subscribe", auth, async (req, res) => {
       return res.status(400).json({ error: "Not enough lucks" })
 
     user.lucks -= price
-    await user.save()
+await user.save()
+const luxerAccount = await User.findOneAndUpdate(
+  { username: "Luxer" },
+  { $inc: { lucks: price } }
+)
+if (!luxerAccount) console.warn("Cuenta @Luxer no existe")
 
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
     await LuxerUsage.findOneAndUpdate(
