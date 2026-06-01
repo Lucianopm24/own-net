@@ -2256,7 +2256,7 @@ app.post("/luxer/chat", auth, async (req, res) => {
         const cost = Math.ceil(result.text.length / 250)
         const user = await User.findById(req.user.id)
         if (user.lucks < cost) {
-          return res.status(402).json({ error: "payg_insufficient", message: `Necesitas ${cost} LUCKS para esta respuesta pero solo tienes ${user.lucks}.` })
+          return res.status(402).json({ error: "payg_insufficient", message: `Necesitas ${cost} LUCKS pero solo tienes ${user.lucks}.` })
         }
         user.lucks -= cost
         await user.save()
