@@ -2154,7 +2154,8 @@ const LuxerUsageSchema = new mongoose.Schema({
   tier: { type: String, enum: ["free", "pro", "max"], default: "free" },
   tierExpiresAt: { type: Date, default: null },
   messages: { type: Number, default: 0 },
-  windowStart: { type: Date, default: Date.now }
+  windowStart: { type: Date, default: Date.now },
+  payg: { type: Boolean, default: false }
 })
 const LuxerUsage = mongoose.models.LuxerUsage || mongoose.model("LuxerUsage", LuxerUsageSchema)
 
@@ -2247,8 +2248,22 @@ app.post("/luxer/chat", auth, async (req, res) => {
       usage.tierExpiresAt = null
     }
 
-    const limit = LUXER_TIERS[usage.tier].messages
+   const limit = LUXER_TIERS[usage.tier].messages
     if (usage.messages >= limit) {
+      if (usage.payg) {
+        const result = await callAI(messages)
+        if (!result.ok) return res.status(503).json({ error: "All AI providers failed" })
+        const cost = Math.ceil(result.text.length / 250)
+        const user = await User.findById(req.user.id)
+        if (user.lucks < cost) {
+          return res.status(402).json({ error: "payg_insufficient", message: `Necesitas ${cost} LUCKS para esta respuesta pero solo tienes ${user.lucks}.` })
+        }
+        user.lucks -= cost
+        await user.save()
+        usage.messages += 1
+        await usage.save()
+        return res.json({ reply: result.text, usage: { messages: usage.messages, limit, tier: usage.tier }, payg: { charged: cost, balance: user.lucks } })
+      }
       const next = { free: "pro", pro: "max" }[usage.tier]
       const price = next ? LUXER_TIERS[next].price : null
       const resetIn = Math.ceil((WINDOW_MS - (Date.now() - new Date(usage.windowStart).getTime())) / 60000)
@@ -2323,7 +2338,8 @@ app.get("/luxer/status", auth, async (req, res) => {
       messages_used: usage.messages,
       messages_limit: LUXER_TIERS[usage.tier].messages,
       tier_expires_at: usage.tierExpiresAt,
-      reset_in_minutes: resetIn < 0 ? 0 : resetIn
+      reset_in_minutes: resetIn < 0 ? 0 : resetIn,
+      payg: usage.payg
     })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
@@ -2442,6 +2458,18 @@ app.post("/luxer/innernet", auth, async (req, res) => {
       return res.json(created)
     }
     res.status(400).json({ error: "Unknown tool" })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post("/luxer/payg", auth, async (req, res) => {
+  try {
+    const { enabled } = req.body
+    const usage = await LuxerUsage.findOneAndUpdate(
+      { username: req.user.username },
+      { payg: enabled },
+      { upsert: true, new: true }
+    )
+    res.json({ payg: usage.payg })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
