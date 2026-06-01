@@ -26,21 +26,29 @@ const LUCKS_API_KEY =
 
 const DOMAIN_PRICE = 100
 
+const TLDSchema = new mongoose.Schema({
+  tld: { type: String, unique: true }
+})
+const TLD = mongoose.models.TLD || mongoose.model("TLD", TLDSchema)
+
+// Inicializar TLDs por defecto si no existen
+async function initTLDs() {
+  const count = await TLD.countDocuments()
+  if (count === 0) {
+    await TLD.insertMany([
+      { tld: ".green" }, { tld: ".party" }, { tld: ".lbc" },
+      { tld: ".inn" }, { tld: ".abc" }, { tld: ".cc" }
+    ])
+  }
+}
+mongoose.connection.once("open", () => { console.log("Mongo connected"); initTLDs() })
+
 // =========================
 // MONGO
 // =========================
 
 mongoose.connect(
     process.env.MONGO_URI
-)
-
-mongoose.connection.once(
-    "open",
-    () => {
-        console.log(
-            "Mongo connected"
-        )
-    }
 )
 
 // =========================
@@ -562,14 +570,8 @@ app.post(
                     "Domain taken"
                 })
 
-            const allowed = [
-                ".green",
-                ".party",
-                ".lbc",
-                ".inn",
-                ".abc",
-                ".cc"
-            ]
+            const allowedDocs = await TLD.find()
+const valid = allowedDocs.some(t => domain.endsWith(t.tld))
 
             const valid =
                 allowed.some(
@@ -2119,6 +2121,34 @@ app.post("/telegram/upload", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
+})
+
+// TLDs — listar
+app.get("/tlds", async (req, res) => {
+  try {
+    const tlds = await TLD.find({}, { tld: 1, _id: 0 })
+    res.json(tlds.map(t => t.tld))
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// TLDs — agregar (solo Luciano)
+app.post("/tlds", auth, async (req, res) => {
+  try {
+    if (req.user.username !== "Luciano") return res.status(403).json({ error: "Unauthorized" })
+    const { tld } = req.body
+    if (!tld || !tld.startsWith(".")) return res.status(400).json({ error: "Invalid TLD" })
+    await TLD.create({ tld: tld.toLowerCase() })
+    res.json({ success: true, tld })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// TLDs — quitar (solo Luciano)
+app.delete("/tlds/:tld", auth, async (req, res) => {
+  try {
+    if (req.user.username !== "Luciano") return res.status(403).json({ error: "Unauthorized" })
+    await TLD.deleteOne({ tld: req.params.tld })
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
 // =========================
