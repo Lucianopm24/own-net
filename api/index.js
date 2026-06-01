@@ -2264,7 +2264,11 @@ app.post("/luxer/chat", auth, async (req, res) => {
       })
     }
 
-    const result = await callAI(messages)
+    const trimmed = messages.map(m => ({
+  ...m,
+  content: m.content.length > 500 ? m.content.slice(0, 500) + "…[truncado]" : m.content
+}))
+const result = await callAI(trimmed)
     if (!result.ok) return res.status(503).json({ error: "All AI providers failed" })
 
     usage.messages += 1
