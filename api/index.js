@@ -2393,6 +2393,54 @@ app.delete("/luxer/chats/:id", auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// LUXER INNERNET TOOLS
+app.post("/luxer/innernet", auth, async (req, res) => {
+  try {
+    const { tool, params } = req.body
+    if (tool === "check_domain") {
+      const found = await Domain.findOne({ domain: params.domain })
+      return res.json({ available: !found, owner: found?.owner || null })
+    }
+    if (tool === "get_balance") {
+      const user = await User.findOne({ username: req.user.username })
+      return res.json({ balance: user.lucks })
+    }
+    if (tool === "list_domains") {
+      const domains = await Domain.find({ owner: req.user.username }, { domain: 1, cname: 1, _id: 0 })
+      return res.json({ domains })
+    }
+    if (tool === "get_user_info") {
+      const user = await User.findOne({ username: params.username }, { password: 0 })
+      if (!user) return res.status(404).json({ error: "User not found" })
+      return res.json({ username: user.username, lucks: user.lucks })
+    }
+    if (tool === "transfer_lucks") {
+      const { to, amount } = params
+      const sender = await User.findById(req.user.id)
+      const receiver = await User.findOne({ username: to })
+      if (!receiver) return res.status(404).json({ error: "User not found" })
+      if (sender.lucks < amount) return res.status(400).json({ error: "Not enough lucks" })
+      sender.lucks -= amount; receiver.lucks += amount
+      await sender.save(); await receiver.save()
+      return res.json({ success: true, balance: sender.lucks })
+    }
+    if (tool === "register_domain") {
+      const { domain } = params
+      const exists = await Domain.findOne({ domain })
+      if (exists) return res.status(400).json({ error: "Domain taken" })
+      const allowedDocs = await TLD.find()
+      if (!allowedDocs.some(t => domain.endsWith(t.tld)))
+        return res.status(400).json({ error: "Invalid TLD" })
+      const user = await User.findById(req.user.id)
+      if (user.lucks < DOMAIN_PRICE) return res.status(400).json({ error: "Not enough lucks" })
+      user.lucks -= DOMAIN_PRICE; await user.save()
+      const created = await Domain.create({ domain, owner: user.username })
+      return res.json(created)
+    }
+    res.status(400).json({ error: "Unknown tool" })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // =========================
 // HEALTH
 // =========================
