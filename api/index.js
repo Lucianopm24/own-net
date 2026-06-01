@@ -2146,6 +2146,180 @@ app.delete("/tlds/:tld", auth, async (req, res) => {
 })
 
 // =========================
+// LUXER AI
+// =========================
+
+const LuxerUsageSchema = new mongoose.Schema({
+  username: { type: String, unique: true },
+  tier: { type: String, enum: ["free", "pro", "max"], default: "free" },
+  tierExpiresAt: { type: Date, default: null },
+  messages: { type: Number, default: 0 },
+  windowStart: { type: Date, default: Date.now }
+})
+const LuxerUsage = mongoose.models.LuxerUsage || mongoose.model("LuxerUsage", LuxerUsageSchema)
+
+const LUXER_TIERS = {
+  free: { messages: 10, price: 0 },
+  pro:  { messages: 50, price: 999 },
+  max:  { messages: 250, price: 5549 }
+}
+const WINDOW_MS = 5 * 60 * 60 * 1000 // 5 horas
+
+async function callGroq(messages) {
+  const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.GROQ_API_KEY}` },
+    body: JSON.stringify({ model: "meta-llama/llama-4-scout-17b-16e-instruct", messages, max_tokens: 1024 })
+  })
+  const d = await r.json()
+  if (!r.ok) throw new Error(d.error?.message || "Groq error")
+  return d.choices[0].message.content
+}
+
+async function callGemini(messages) {
+  const contents = messages.filter(m => m.role !== "system").map(m => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [{ text: m.content }]
+  }))
+  const systemMsg = messages.find(m => m.role === "system")
+  const body = { contents }
+  if (systemMsg) body.systemInstruction = { parts: [{ text: systemMsg.content }] }
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  })
+  const d = await r.json()
+  if (!r.ok) throw new Error(d.error?.message || "Gemini error")
+  return d.candidates[0].content.parts[0].text
+}
+
+async function callHuggingFace(messages) {
+  const prompt = messages.map(m => `${m.role}: ${m.content}`).join("\n") + "\nassistant:"
+  const r = await fetch("https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.HF_API_KEY}` },
+    body: JSON.stringify({ inputs: prompt, parameters: { max_new_tokens: 512 } })
+  })
+  const d = await r.json()
+  if (!r.ok || d.error) throw new Error(d.error || "HF error")
+  return Array.isArray(d) ? d[0].generated_text.split("assistant:").pop().trim() : d.generated_text
+}
+
+async function callOpenRouter(messages) {
+  const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}` },
+    body: JSON.stringify({ model: "mistralai/mistral-7b-instruct:free", messages, max_tokens: 1024 })
+  })
+  const d = await r.json()
+  if (!r.ok) throw new Error(d.error?.message || "OpenRouter error")
+  return d.choices[0].message.content
+}
+
+async function callAI(messages) {
+  const providers = [callGroq, callGemini, callHuggingFace, callOpenRouter]
+  for (const fn of providers) {
+    try { return { text: await fn(messages), ok: true } } catch (e) { continue }
+  }
+  return { text: null, ok: false }
+}
+
+// Chat
+app.post("/luxer/chat", auth, async (req, res) => {
+  try {
+    const { messages } = req.body
+    if (!messages || !Array.isArray(messages))
+      return res.status(400).json({ error: "Missing messages" })
+
+    let usage = await LuxerUsage.findOne({ username: req.user.username })
+    if (!usage) usage = await LuxerUsage.create({ username: req.user.username })
+
+    // Resetear ventana si pasaron 5 horas
+    if (Date.now() - new Date(usage.windowStart).getTime() > WINDOW_MS) {
+      usage.messages = 0
+      usage.windowStart = new Date()
+    }
+
+    // Expirar tier si pasó 1 mes
+    if (usage.tierExpiresAt && new Date() > usage.tierExpiresAt) {
+      usage.tier = "free"
+      usage.tierExpiresAt = null
+    }
+
+    const limit = LUXER_TIERS[usage.tier].messages
+    if (usage.messages >= limit) {
+      const next = { free: "pro", pro: "max" }[usage.tier]
+      const price = next ? LUXER_TIERS[next].price : null
+      const resetIn = Math.ceil((WINDOW_MS - (Date.now() - new Date(usage.windowStart).getTime())) / 60000)
+      return res.status(429).json({
+        error: "limit_reached",
+        tier: usage.tier,
+        next_tier: next || null,
+        next_price: price,
+        reset_in_minutes: resetIn,
+        message: next
+          ? `Alcanzaste tu límite de mensajes. Actualiza a ${next.charAt(0).toUpperCase() + next.slice(1)} por solo ${price} LUCKS al mes y obtén ${LUXER_TIERS[next].messages / LUXER_TIERS[usage.tier].messages}x más uso.`
+          : `Alcanzaste el límite máximo. Reinicia en ${resetIn} minutos.`
+      })
+    }
+
+    const result = await callAI(messages)
+    if (!result.ok) return res.status(503).json({ error: "All AI providers failed" })
+
+    usage.messages += 1
+    await usage.save()
+
+    res.json({ reply: result.text, usage: { messages: usage.messages, limit, tier: usage.tier } })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Suscribir
+app.post("/luxer/subscribe", auth, async (req, res) => {
+  try {
+    const { tier } = req.body
+    if (!["pro", "max"].includes(tier))
+      return res.status(400).json({ error: "Invalid tier" })
+
+    const price = LUXER_TIERS[tier].price
+    const user = await User.findById(req.user.id)
+    if (user.lucks < price)
+      return res.status(400).json({ error: "Not enough lucks" })
+
+    user.lucks -= price
+    await user.save()
+
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+    await LuxerUsage.findOneAndUpdate(
+      { username: req.user.username },
+      { tier, tierExpiresAt: expiresAt, messages: 0, windowStart: new Date() },
+      { upsert: true, new: true }
+    )
+
+    res.json({ success: true, tier, expiresAt, lucks_remaining: user.lucks })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Estado del usuario
+app.get("/luxer/status", auth, async (req, res) => {
+  try {
+    let usage = await LuxerUsage.findOne({ username: req.user.username })
+    if (!usage) usage = await LuxerUsage.create({ username: req.user.username })
+    if (usage.tierExpiresAt && new Date() > usage.tierExpiresAt) {
+      usage.tier = "free"; usage.tierExpiresAt = null; await usage.save()
+    }
+    const resetIn = Math.ceil((WINDOW_MS - (Date.now() - new Date(usage.windowStart).getTime())) / 60000)
+    res.json({
+      tier: usage.tier,
+      messages_used: usage.messages,
+      messages_limit: LUXER_TIERS[usage.tier].messages,
+      tier_expires_at: usage.tierExpiresAt,
+      reset_in_minutes: resetIn < 0 ? 0 : resetIn
+    })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// =========================
 // HEALTH
 // =========================
 
