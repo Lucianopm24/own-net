@@ -571,7 +571,7 @@ app.post(
                 })
 
             const allowedDocs = await TLD.find()
-const valid = allowedDocs.some(t => domain.endsWith(t.tld))
+const isTldValid = allowedDocs.some(t => domain.endsWith(t.tld))
 
             const valid =
                 allowed.some(
@@ -579,7 +579,7 @@ const valid = allowedDocs.some(t => domain.endsWith(t.tld))
                     domain.endsWith(ext)
                 )
 
-            if (!valid)
+            if (!isTldValid)
                 return res
                 .status(400)
                 .json({
