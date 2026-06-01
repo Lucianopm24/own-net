@@ -1861,8 +1861,8 @@ app.post("/domains/ssl", auth, async (req, res) => {
     // Solo luciano puede asignar "trusted"
     if ((ssl === "trusted" || ssl === "popular") && req.user.username !== "Luciano")
       return res.status(403).json({ error: "Unauthorized" })
-    const valid = [null, "self", "popular", "trusted"]
-    if (!valid.includes(ssl))
+    const validSsl = [null, "self", "popular", "trusted"]
+if (!validSsl.includes(ssl))
       return res.status(400).json({ error: "Invalid ssl value" })
     found.ssl = ssl
     await found.save()
