@@ -2320,6 +2320,75 @@ app.get("/luxer/status", auth, async (req, res) => {
 })
 
 // =========================
+// LUXER HISTORY
+// =========================
+
+const LuxerChatSchema = new mongoose.Schema({
+  id: { type: String, unique: true },
+  username: String,
+  title: String,
+  messages: [{ role: String, content: String }],
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+})
+const LuxerChat = mongoose.models.LuxerChat || mongoose.model("LuxerChat", LuxerChatSchema)
+
+// Listar chats
+app.get("/luxer/chats", auth, async (req, res) => {
+  try {
+    const chats = await LuxerChat.find({ username: req.user.username }, { messages: 0 }).sort({ updatedAt: -1 })
+    res.json(chats)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Obtener chat completo
+app.get("/luxer/chats/:id", auth, async (req, res) => {
+  try {
+    const chat = await LuxerChat.findOne({ id: req.params.id, username: req.user.username })
+    if (!chat) return res.status(404).json({ error: "Not found" })
+    res.json(chat)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Crear chat
+app.post("/luxer/chats", auth, async (req, res) => {
+  try {
+    const { title, messages } = req.body
+    const chat = await LuxerChat.create({
+      id: uuidv4(),
+      username: req.user.username,
+      title: title || "Nueva conversación",
+      messages: messages || []
+    })
+    res.json(chat)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Actualizar chat (agregar mensajes, cambiar título)
+app.put("/luxer/chats/:id", auth, async (req, res) => {
+  try {
+    const { messages, title } = req.body
+    const chat = await LuxerChat.findOne({ id: req.params.id, username: req.user.username })
+    if (!chat) return res.status(404).json({ error: "Not found" })
+    if (messages !== undefined) chat.messages = messages
+    if (title !== undefined) chat.title = title
+    chat.updatedAt = new Date()
+    await chat.save()
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Borrar chat
+app.delete("/luxer/chats/:id", auth, async (req, res) => {
+  try {
+    const chat = await LuxerChat.findOne({ id: req.params.id, username: req.user.username })
+    if (!chat) return res.status(404).json({ error: "Not found" })
+    await chat.deleteOne()
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// =========================
 // HEALTH
 // =========================
 
