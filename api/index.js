@@ -410,8 +410,20 @@ app.post(
                     "Invalid password"
                 })
 
-            const token =
-                createToken(user)
+           if (user.twoFactorEnabled) {
+  const tempToken = jwt.sign(
+    { id: user._id, username: user.username, temp: true },
+    JWT_SECRET,
+    { expiresIn: "5m" }
+  )
+  return res.json({ requiresTwoFactor: true, tempToken })
+}
+const token = createToken(user)
+res.json({
+    token,
+    username: user.username,
+    lucks: user.lucks
+})
 
             res.json({
 
