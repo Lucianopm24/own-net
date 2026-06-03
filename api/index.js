@@ -2648,8 +2648,16 @@ app.post("/auth/2fa/confirm", async (req, res) => {
     if (!valid)
       return res.status(400).json({ error: "Invalid code" })
 
-    const token = createToken(user)
-    res.json({ token, username: user.username, lucks: user.lucks })
+    if (user.twoFactorEnabled) {
+  const tempToken = jwt.sign(
+    { id: user._id, username: user.username, temp: true },
+    JWT_SECRET,
+    { expiresIn: "5m" }
+  )
+  return res.json({ requiresTwoFactor: true, tempToken })
+}
+const token = createToken(user)
+res.json({ token, username: user.username, lucks: user.lucks })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
