@@ -63,8 +63,29 @@ const PelicanUserSchema = new mongoose.Schema({
   username: { type: String, unique: true },
   password: String,
   displayName: String,
+  pelicanId: { type: Number, unique: true },
   status: { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
   createdAt: { type: Date, default: Date.now }
+})
+
+const PelicanFieldDefSchema = new mongoose.Schema({
+  id: { type: String, unique: true },
+  name: String,
+  createdBy: String,
+  createdAt: { type: Date, default: Date.now }
+})
+
+const PelicanFieldValueSchema = new mongoose.Schema({
+  fieldId: String,
+  targetPelicanId: Number,
+  value: String,
+  updatedBy: String,
+  updatedAt: { type: Date, default: Date.now }
+})
+PelicanFieldValueSchema.index({ fieldId: 1, targetPelicanId: 1 }, { unique: true })
+
+const PelicanPermissionSchema = new mongoose.Schema({
+  username: { type: String, unique: true }
 })
 
 const ElectionSchema = new mongoose.Schema({
@@ -264,6 +285,9 @@ const Election = mongoose.models.Election || mongoose.model("Election", Election
 const Category = mongoose.models.Category || mongoose.model("Category", CategorySchema)
 const Vote = mongoose.models.Vote || mongoose.model("Vote", VoteSchema)
 const CandidateApplication = mongoose.models.CandidateApplication || mongoose.model("CandidateApplication", CandidateApplicationSchema)
+const PelicanFieldDef = mongoose.models.PelicanFieldDef || mongoose.model("PelicanFieldDef", PelicanFieldDefSchema)
+const PelicanFieldValue = mongoose.models.PelicanFieldValue || mongoose.model("PelicanFieldValue", PelicanFieldValueSchema)
+const PelicanPermission = mongoose.models.PelicanPermission || mongoose.model("PelicanPermission", PelicanPermissionSchema)
 
 // =========================
 // AUTH
@@ -2782,6 +2806,10 @@ app.post("/pelican/request", async (req, res) => {
     const exists = await PelicanUser.findOne({ username })
     if (exists) return res.status(400).json({ error: "Username taken" })
     const hashed = await bcrypt.hash(password, 10)
+      // En /pelican/request, antes del create:
+const last = await PelicanUser.findOne().sort({ pelicanId: -1 })
+const pelicanId = (last?.pelicanId || 0) + 1
+await PelicanUser.create({ username, password: hashed, displayName, pelicanId })
     await PelicanUser.create({ username, password: hashed, displayName })
     res.json({ success: true, message: "Request sent, wait for approval" })
   } catch (e) { res.status(500).json({ error: e.message }) }
@@ -3024,6 +3052,147 @@ app.get("/pelican/registraduria", async (req, res) => {
   try {
     const candidates = await CandidateApplication.find({ status: "approved" }, { username: 0 })
     res.json(candidates)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Middleware permiso (admin o usuario con permiso)
+async function pelicanPermission(req, res, next) {
+  if (req.user?.username === "Luciano") { next(); return }
+  const hasPerm = await PelicanPermission.findOne({ username: req.pelican?.username })
+  if (!hasPerm) return res.status(403).json({ error: "No permission" })
+  next()
+}
+
+// Ver perfil por ID (público)
+app.get("/pelican/id/:id", async (req, res) => {
+  try {
+    const user = await PelicanUser.findOne({ pelicanId: req.params.id }, { password: 0 })
+    if (!user) return res.status(404).json({ error: "Not found" })
+    const fields = await PelicanFieldDef.find()
+    const values = await PelicanFieldValue.find({ targetPelicanId: Number(req.params.id) })
+    res.json({ user, fields, values })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ═══════════════════════
+// CAMPOS
+// ═══════════════════════
+
+// Listar campos definidos
+app.get("/pelican/fields", async (req, res) => {
+  try {
+    const fields = await PelicanFieldDef.find()
+    res.json(fields)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Crear campo (admin o con permiso)
+app.post("/pelican/fields", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader) return res.status(401).json({ error: "No token" })
+    const token = authHeader.split(" ")[1]
+    let createdBy
+    try {
+      const d = jwt.verify(token, JWT_SECRET)
+      if (d.username !== "Luciano") return res.status(403).json({ error: "Unauthorized" })
+      createdBy = d.username
+    } catch {
+      const d = jwt.verify(token, JWT_SECRET + "_pelican")
+      const perm = await PelicanPermission.findOne({ username: d.username })
+      if (!perm) return res.status(403).json({ error: "No permission" })
+      createdBy = d.username
+    }
+    const { name } = req.body
+    const field = await PelicanFieldDef.create({ id: uuidv4(), name, createdBy })
+    res.json(field)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Eliminar campo (solo admin)
+app.delete("/pelican/fields/:id", auth, pelicanAdmin, async (req, res) => {
+  try {
+    await PelicanFieldDef.deleteOne({ id: req.params.id })
+    await PelicanFieldValue.deleteMany({ fieldId: req.params.id })
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Editar valor de campo en un perfil
+app.post("/pelican/fields/:fieldId/value/:pelicanId", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader) return res.status(401).json({ error: "No token" })
+    const token = authHeader.split(" ")[1]
+    let updatedBy
+    try {
+      const d = jwt.verify(token, JWT_SECRET)
+      if (d.username !== "Luciano") return res.status(403).json({ error: "Unauthorized" })
+      updatedBy = d.username
+    } catch {
+      const d = jwt.verify(token, JWT_SECRET + "_pelican")
+      const perm = await PelicanPermission.findOne({ username: d.username })
+      if (!perm) return res.status(403).json({ error: "No permission" })
+      updatedBy = d.username
+    }
+    const { value } = req.body
+    await PelicanFieldValue.findOneAndUpdate(
+      { fieldId: req.params.fieldId, targetPelicanId: Number(req.params.pelicanId) },
+      { value, updatedBy, updatedAt: new Date() },
+      { upsert: true, new: true }
+    )
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Eliminar valor de campo
+app.delete("/pelican/fields/:fieldId/value/:pelicanId", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization
+    if (!authHeader) return res.status(401).json({ error: "No token" })
+    const token = authHeader.split(" ")[1]
+    try {
+      const d = jwt.verify(token, JWT_SECRET)
+      if (d.username !== "Luciano") return res.status(403).json({ error: "Unauthorized" })
+    } catch {
+      const d = jwt.verify(token, JWT_SECRET + "_pelican")
+      const perm = await PelicanPermission.findOne({ username: d.username })
+      if (!perm) return res.status(403).json({ error: "No permission" })
+    }
+    await PelicanFieldValue.deleteOne({ fieldId: req.params.fieldId, targetPelicanId: Number(req.params.pelicanId) })
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ═══════════════════════
+// PERMISOS
+// ═══════════════════════
+
+// Listar usuarios con permiso
+app.get("/pelican/admin/permissions", auth, pelicanAdmin, async (req, res) => {
+  try {
+    const perms = await PelicanPermission.find()
+    res.json(perms)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Dar permiso
+app.post("/pelican/admin/permissions/:username", auth, pelicanAdmin, async (req, res) => {
+  try {
+    await PelicanPermission.findOneAndUpdate(
+      { username: req.params.username },
+      { username: req.params.username },
+      { upsert: true }
+    )
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Quitar permiso
+app.delete("/pelican/admin/permissions/:username", auth, pelicanAdmin, async (req, res) => {
+  try {
+    await PelicanPermission.deleteOne({ username: req.params.username })
+    res.json({ success: true })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
