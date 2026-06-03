@@ -452,13 +452,11 @@ app.get(
                 req.user.id
             )
 
-        res.json({
-
-            username:
-                user.username,
-
-            lucks:
-                user.lucks
+       res.json({
+  username: user.username,
+  lucks: user.lucks,
+  twoFactorEnabled: user.twoFactorEnabled || false
+})
 
         })
 
