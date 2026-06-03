@@ -1395,13 +1395,14 @@ app.delete("/domains/sub", auth, async (req, res) => {
 })
 
 // Resolver subdominio
-app.get("/resolve/sub/:subdomain.:domain", async (req, res) => {
+app.get("/resolve/sub/:full", async (req, res) => {
   try {
-    const { subdomain, domain } = req.params
+    const parts = req.params.full.split(".")
+    const subdomain = parts[0]
+    const domain = parts.slice(1).join(".")
     const found = await Subdomain.findOne({ domain, subdomain })
     if (!found)
       return res.status(404).json({ error: "Not found" })
-
     res.json({
       full: `${subdomain}.${domain}`,
       domain, subdomain,
