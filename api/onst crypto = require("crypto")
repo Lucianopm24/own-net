@@ -59,6 +59,47 @@ mongoose.connect(
 // MODELS
 // =========================
 
+const PelicanUserSchema = new mongoose.Schema({
+  username: { type: String, unique: true },
+  password: String,
+  displayName: String,
+  status: { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
+  createdAt: { type: Date, default: Date.now }
+})
+
+const ElectionSchema = new mongoose.Schema({
+  id: { type: String, unique: true },
+  title: String,
+  status: { type: String, enum: ["open", "closed"], default: "closed" },
+  showResults: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
+})
+
+const CategorySchema = new mongoose.Schema({
+  id: { type: String, unique: true },
+  electionId: String,
+  title: String,
+  candidates: [{ id: String, name: String, registradoriaId: { type: String, default: null } }]
+})
+
+const VoteSchema = new mongoose.Schema({
+  electionId: String,
+  categoryId: String,
+  candidateId: String,
+  voterHash: String, // hash del username, nunca el username directo
+  createdAt: { type: Date, default: Date.now }
+})
+VoteSchema.index({ categoryId: 1, voterHash: 1 }, { unique: true })
+
+const CandidateApplicationSchema = new mongoose.Schema({
+  id: { type: String, unique: true },
+  username: String,
+  displayName: String,
+  pdfUrl: String,
+  status: { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
+  createdAt: { type: Date, default: Date.now }
+})
+
 const OAuthCodeSchema = new mongoose.Schema({
   code: { type: String, unique: true },
   projectId: String,
@@ -218,6 +259,11 @@ const AdView = mongoose.models.AdView || mongoose.model("AdView", AdViewSchema)
 const AdConfig = mongoose.models.AdConfig || mongoose.model("AdConfig", AdConfigSchema)
 const AdAccount = mongoose.models.AdAccount || mongoose.model("AdAccount", AdAccountSchema)
 const Ad = mongoose.models.Ad || mongoose.model("Ad", AdSchema)
+const PelicanUser = mongoose.models.PelicanUser || mongoose.model("PelicanUser", PelicanUserSchema)
+const Election = mongoose.models.Election || mongoose.model("Election", ElectionSchema)
+const Category = mongoose.models.Category || mongoose.model("Category", CategorySchema)
+const Vote = mongoose.models.Vote || mongoose.model("Vote", VoteSchema)
+const CandidateApplication = mongoose.models.CandidateApplication || mongoose.model("CandidateApplication", CandidateApplicationSchema)
 
 // =========================
 // AUTH
@@ -2696,6 +2742,288 @@ app.post("/auth/2fa/disable", auth, async (req, res) => {
     await user.save()
 
     res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+const crypto = require("crypto")
+function hashVoter(username) {
+  return crypto.createHash("sha256").update(username + process.env.JWT_SECRET).digest("hex")
+}
+
+// Middleware admin Pelican (Innernet Luciano)
+function pelicanAdmin(req, res, next) {
+  if (req.user?.username !== "Luciano")
+    return res.status(403).json({ error: "Unauthorized" })
+  next()
+}
+
+// Auth Pelican
+async function pelicanAuth(req, res, next) {
+  try {
+    const header = req.headers.authorization
+    if (!header) return res.status(401).json({ error: "No token" })
+    const token = header.split(" ")[1]
+    const decoded = jwt.verify(token, JWT_SECRET + "_pelican")
+    req.pelican = decoded
+    next()
+  } catch { res.status(401).json({ error: "Invalid token" }) }
+}
+
+// ═══════════════════════
+// PELICAN AUTH
+// ═══════════════════════
+
+// Solicitar cuenta (registro)
+app.post("/pelican/request", async (req, res) => {
+  try {
+    const { username, password, displayName } = req.body
+    if (!username || !password || !displayName)
+      return res.status(400).json({ error: "Missing fields" })
+    const exists = await PelicanUser.findOne({ username })
+    if (exists) return res.status(400).json({ error: "Username taken" })
+    const hashed = await bcrypt.hash(password, 10)
+    await PelicanUser.create({ username, password: hashed, displayName })
+    res.json({ success: true, message: "Request sent, wait for approval" })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Login Pelican
+app.post("/pelican/login", async (req, res) => {
+  try {
+    const { username, password } = req.body
+    const user = await PelicanUser.findOne({ username })
+    if (!user) return res.status(404).json({ error: "User not found" })
+    if (user.status === "pending") return res.status(403).json({ error: "Account pending approval" })
+    if (user.status === "rejected") return res.status(403).json({ error: "Account rejected" })
+    const valid = await bcrypt.compare(password, user.password)
+    if (!valid) return res.status(400).json({ error: "Invalid password" })
+    const token = jwt.sign({ username: user.username, displayName: user.displayName }, JWT_SECRET + "_pelican", { expiresIn: "30d" })
+    res.json({ token, username: user.username, displayName: user.displayName })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ═══════════════════════
+// ADMIN — USUARIOS
+// ═══════════════════════
+
+// Listar solicitudes pendientes
+app.get("/pelican/admin/requests", auth, pelicanAdmin, async (req, res) => {
+  try {
+    const users = await PelicanUser.find({ status: "pending" }, { password: 0 })
+    res.json(users)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Aprobar o rechazar
+app.post("/pelican/admin/requests/:username", auth, pelicanAdmin, async (req, res) => {
+  try {
+    const { action } = req.body // "approve" | "reject"
+    if (!["approve", "reject"].includes(action))
+      return res.status(400).json({ error: "Invalid action" })
+    const user = await PelicanUser.findOne({ username: req.params.username })
+    if (!user) return res.status(404).json({ error: "User not found" })
+    user.status = action === "approve" ? "approved" : "rejected"
+    await user.save()
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ═══════════════════════
+// ADMIN — ELECCIONES
+// ═══════════════════════
+
+// Crear elección
+app.post("/pelican/admin/elections", auth, pelicanAdmin, async (req, res) => {
+  try {
+    const { title } = req.body
+    const election = await Election.create({ id: uuidv4(), title })
+    res.json(election)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Listar elecciones
+app.get("/pelican/elections", async (req, res) => {
+  try {
+    const elections = await Election.find().sort({ createdAt: -1 })
+    res.json(elections)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Abrir/cerrar elección y mostrar resultados
+app.post("/pelican/admin/elections/:id", auth, pelicanAdmin, async (req, res) => {
+  try {
+    const { status, showResults } = req.body
+    const election = await Election.findOne({ id: req.params.id })
+    if (!election) return res.status(404).json({ error: "Not found" })
+    if (status !== undefined) election.status = status
+    if (showResults !== undefined) election.showResults = showResults
+    await election.save()
+    res.json(election)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Editar título
+app.put("/pelican/admin/elections/:id", auth, pelicanAdmin, async (req, res) => {
+  try {
+    const { title } = req.body
+    const election = await Election.findOne({ id: req.params.id })
+    if (!election) return res.status(404).json({ error: "Not found" })
+    election.title = title
+    await election.save()
+    res.json(election)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ═══════════════════════
+// ADMIN — CATEGORÍAS
+// ═══════════════════════
+
+// Crear categoría
+app.post("/pelican/admin/elections/:id/categories", auth, pelicanAdmin, async (req, res) => {
+  try {
+    const { title } = req.body
+    const category = await Category.create({ id: uuidv4(), electionId: req.params.id, title, candidates: [] })
+    res.json(category)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Listar categorías de una elección
+app.get("/pelican/elections/:id/categories", async (req, res) => {
+  try {
+    const categories = await Category.find({ electionId: req.params.id })
+    res.json(categories)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Agregar candidato a categoría
+app.post("/pelican/admin/categories/:id/candidates", auth, pelicanAdmin, async (req, res) => {
+  try {
+    const { name, registradoriaId } = req.body
+    const category = await Category.findOne({ id: req.params.id })
+    if (!category) return res.status(404).json({ error: "Not found" })
+    category.candidates.push({ id: uuidv4(), name, registradoriaId: registradoriaId || null })
+    await category.save()
+    res.json(category)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Editar/eliminar candidato
+app.delete("/pelican/admin/categories/:id/candidates/:candidateId", auth, pelicanAdmin, async (req, res) => {
+  try {
+    const category = await Category.findOne({ id: req.params.id })
+    if (!category) return res.status(404).json({ error: "Not found" })
+    category.candidates = category.candidates.filter(c => c.id !== req.params.candidateId)
+    await category.save()
+    res.json(category)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ═══════════════════════
+// VOTAR
+// ═══════════════════════
+
+app.post("/pelican/vote", pelicanAuth, async (req, res) => {
+  try {
+    const { electionId, categoryId, candidateId } = req.body
+    const election = await Election.findOne({ id: electionId })
+    if (!election) return res.status(404).json({ error: "Election not found" })
+    if (election.status !== "open") return res.status(400).json({ error: "Election is closed" })
+
+    const category = await Category.findOne({ id: categoryId })
+    if (!category) return res.status(404).json({ error: "Category not found" })
+
+    // Validar candidato (incluyendo voto en blanco)
+    const validCandidate = candidateId === "blank" || category.candidates.some(c => c.id === candidateId)
+    if (!validCandidate) return res.status(400).json({ error: "Invalid candidate" })
+
+    const voterHash = hashVoter(req.pelican.username)
+
+    await Vote.create({ electionId, categoryId, candidateId, voterHash })
+    res.json({ success: true })
+  } catch (e) {
+    if (e.code === 11000) return res.status(400).json({ error: "Already voted in this category" })
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Ver si ya votó en cada categoría
+app.get("/pelican/myvotes/:electionId", pelicanAuth, async (req, res) => {
+  try {
+    const voterHash = hashVoter(req.pelican.username)
+    const votes = await Vote.find({ electionId: req.params.electionId, voterHash }, { categoryId: 1, _id: 0 })
+    res.json(votes.map(v => v.categoryId))
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ═══════════════════════
+// RESULTADOS
+// ═══════════════════════
+
+app.get("/pelican/elections/:id/results", async (req, res) => {
+  try {
+    const election = await Election.findOne({ id: req.params.id })
+    if (!election) return res.status(404).json({ error: "Not found" })
+    if (!election.showResults) return res.status(403).json({ error: "Results not available yet" })
+
+    const categories = await Category.find({ electionId: req.params.id })
+    const results = await Promise.all(categories.map(async cat => {
+      const votes = await Vote.find({ categoryId: cat.id })
+      const counts = {}
+      votes.forEach(v => { counts[v.candidateId] = (counts[v.candidateId] || 0) + 1 })
+      return {
+        categoryId: cat.id,
+        title: cat.title,
+        total: votes.length,
+        counts
+      }
+    }))
+    res.json(results)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ═══════════════════════
+// REGISTRADURIA
+// ═══════════════════════
+
+// Postularse como candidato
+app.post("/pelican/registraduria/apply", pelicanAuth, async (req, res) => {
+  try {
+    const { displayName, pdfUrl } = req.body
+    if (!displayName || !pdfUrl) return res.status(400).json({ error: "Missing fields" })
+    const exists = await CandidateApplication.findOne({ username: req.pelican.username })
+    if (exists) return res.status(400).json({ error: "Already applied" })
+    const app2 = await CandidateApplication.create({
+      id: uuidv4(), username: req.pelican.username, displayName, pdfUrl
+    })
+    res.json(app2)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Listar aplicaciones (admin)
+app.get("/pelican/admin/registraduria", auth, pelicanAdmin, async (req, res) => {
+  try {
+    const apps = await CandidateApplication.find().sort({ createdAt: -1 })
+    res.json(apps)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Aprobar/rechazar candidato
+app.post("/pelican/admin/registraduria/:id", auth, pelicanAdmin, async (req, res) => {
+  try {
+    const { action } = req.body
+    const app2 = await CandidateApplication.findOne({ id: req.params.id })
+    if (!app2) return res.status(404).json({ error: "Not found" })
+    app2.status = action === "approve" ? "approved" : "rejected"
+    await app2.save()
+    res.json(app2)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Ver candidatos aprobados (público)
+app.get("/pelican/registraduria", async (req, res) => {
+  try {
+    const candidates = await CandidateApplication.find({ status: "approved" }, { username: 0 })
+    res.json(candidates)
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
