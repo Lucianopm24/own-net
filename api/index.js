@@ -138,6 +138,7 @@ const UserSchema = new mongoose.Schema({
     resetTokenExpiry: { type: Date, default: null },
     twoFactorSecret: { type: String, default: null },
     twoFactorEnabled: { type: Boolean, default: false },
+    referredBy: { type: String, default: null },
     lucks: { type: Number, default: 0 },
     createdAt: { type: Date, default: Date.now }
 })
@@ -342,6 +343,18 @@ app.post(
 
                 })
 
+// Procesar referido
+const { ref } = req.body
+if (ref && ref !== username) {
+  const referrer = await User.findOne({ username: ref })
+  if (referrer) {
+    referrer.lucks += 25
+    await referrer.save()
+    user.referredBy = ref
+    await user.save()
+  }
+}
+            
             const token =
                 createToken(user)
 
@@ -354,9 +367,9 @@ app.post(
                 lucks: 0
 
             })
-
+            
         } catch (e) {
-
+            
             res
             .status(500)
             .json({
@@ -424,18 +437,6 @@ res.json({
     username: user.username,
     lucks: user.lucks
 })
-
-            res.json({
-
-                token,
-
-                username:
-                    user.username,
-
-                lucks:
-                    user.lucks
-
-            })
 
         } catch (e) {
 
@@ -618,6 +619,16 @@ const isTldValid = allowedDocs.some(t => domain.endsWith(t.tld))
 
             await user.save()
 
+// 10% al referidor
+if (user.referredBy) {
+  const referrer = await User.findOne({ username: user.referredBy })
+  if (referrer) {
+    const commission = Math.floor(DOMAIN_PRICE * 0.1)
+    referrer.lucks += commission
+    await referrer.save()
+  }
+}
+            
             const created =
                 await Domain.create({
 
@@ -2656,16 +2667,8 @@ app.post("/auth/2fa/confirm", async (req, res) => {
     if (!valid)
       return res.status(400).json({ error: "Invalid code" })
 
-    if (user.twoFactorEnabled) {
-  const tempToken = jwt.sign(
-    { id: user._id, username: user.username, temp: true },
-    JWT_SECRET,
-    { expiresIn: "5m" }
-  )
-  return res.json({ requiresTwoFactor: true, tempToken })
-}
-const token = createToken(user)
-res.json({ token, username: user.username, lucks: user.lucks })
+    const token = createToken(user)
+    res.json({ token, username: user.username, lucks: user.lucks })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
