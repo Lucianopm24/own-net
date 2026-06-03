@@ -458,8 +458,6 @@ app.get(
   twoFactorEnabled: user.twoFactorEnabled || false
 })
 
-        })
-
     }
 
 )
