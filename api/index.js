@@ -133,6 +133,11 @@ EnvVarSchema.index({ projectId: 1, name: 1 }, { unique: true })
 const UserSchema = new mongoose.Schema({
     username: { type: String, unique: true },
     password: String,
+    email: { type: String, default: null },
+    resetToken: { type: String, default: null },
+    resetTokenExpiry: { type: Date, default: null },
+    twoFactorSecret: { type: String, default: null },
+    twoFactorEnabled: { type: Boolean, default: false },
     lucks: { type: Number, default: 0 },
     createdAt: { type: Date, default: Date.now }
 })
