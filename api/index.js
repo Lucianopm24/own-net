@@ -549,6 +549,9 @@ app.post(
             const { domain } =
                 req.body
 
+if (!/^[a-z0-9-]+\.[a-z]+$/.test(domain))
+  return res.status(400).json({ error: "Invalid domain format" })
+            
             if (!domain)
                 return res
                 .status(400)
