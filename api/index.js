@@ -2482,6 +2482,204 @@ app.post("/luxer/payg", auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+const speakeasy = require("speakeasy")
+const QRCode = require("qrcode")
+const nodemailer = require("nodemailer")
+
+// Transporter SMTP
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: process.env.SMTP_PORT,
+  secure: true,
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS
+  }
+})
+
+// ═══════════════════════
+// EMAIL
+// ═══════════════════════
+
+// Agregar/actualizar email
+app.post("/auth/email", auth, async (req, res) => {
+  try {
+    const { email } = req.body
+    if (!email || !email.includes("@"))
+      return res.status(400).json({ error: "Invalid email" })
+    const taken = await User.findOne({ email, _id: { $ne: req.user.id } })
+    if (taken)
+      return res.status(400).json({ error: "Email already in use" })
+    await User.findByIdAndUpdate(req.user.id, { email })
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ═══════════════════════
+// FORGOT PASSWORD
+// ═══════════════════════
+
+app.post("/auth/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body
+    if (!email) return res.status(400).json({ error: "Missing email" })
+
+    const user = await User.findOne({ email })
+    // Siempre responde igual para no revelar si existe
+    if (!user) return res.json({ success: true })
+
+    const token = require("crypto").randomBytes(32).toString("hex")
+    user.resetToken = token
+    user.resetTokenExpiry = new Date(Date.now() + 60 * 60 * 1000) // 1 hora
+    await user.save()
+
+    const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${token}`
+
+    await transporter.sendMail({
+      from: `"InnerNet" <${process.env.SMTP_USER}>`,
+      to: email,
+      subject: "Reset your InnerNet password",
+      html: `
+        <h2>Password Reset</h2>
+        <p>Click the link below to reset your password. It expires in 1 hour.</p>
+        <a href="${resetUrl}">${resetUrl}</a>
+        <p>If you didn't request this, ignore this email.</p>
+      `
+    })
+
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post("/auth/reset-password", async (req, res) => {
+  try {
+    const { token, newPassword } = req.body
+    if (!token || !newPassword)
+      return res.status(400).json({ error: "Missing fields" })
+
+    const user = await User.findOne({
+      resetToken: token,
+      resetTokenExpiry: { $gt: new Date() }
+    })
+    if (!user)
+      return res.status(400).json({ error: "Invalid or expired token" })
+
+    user.password = await bcrypt.hash(newPassword, 10)
+    user.resetToken = null
+    user.resetTokenExpiry = null
+    await user.save()
+
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// ═══════════════════════
+// 2FA
+// ═══════════════════════
+
+// Generar secret y QR
+app.post("/auth/2fa/setup", auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id)
+    if (user.twoFactorEnabled)
+      return res.status(400).json({ error: "2FA already enabled" })
+
+    const secret = speakeasy.generateSecret({
+      name: `InnerNet (${user.username})`
+    })
+
+    // Guardamos el secret temporal (sin activar aún)
+    user.twoFactorSecret = secret.base32
+    await user.save()
+
+    const qrUrl = await QRCode.toDataURL(secret.otpauth_url)
+    res.json({ secret: secret.base32, qr: qrUrl })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Verificar código y activar
+app.post("/auth/2fa/verify", auth, async (req, res) => {
+  try {
+    const { code } = req.body
+    const user = await User.findById(req.user.id)
+
+    const valid = speakeasy.totp.verify({
+      secret: user.twoFactorSecret,
+      encoding: "base32",
+      token: code,
+      window: 1
+    })
+
+    if (!valid)
+      return res.status(400).json({ error: "Invalid code" })
+
+    user.twoFactorEnabled = true
+    await user.save()
+
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Confirmar 2FA en login (token provisional → token real)
+app.post("/auth/2fa/confirm", async (req, res) => {
+  try {
+    const { tempToken, code } = req.body
+    if (!tempToken || !code)
+      return res.status(400).json({ error: "Missing fields" })
+
+    let decoded
+    try {
+      decoded = jwt.verify(tempToken, JWT_SECRET)
+    } catch {
+      return res.status(401).json({ error: "Invalid temp token" })
+    }
+
+    if (!decoded.temp)
+      return res.status(400).json({ error: "Not a temp token" })
+
+    const user = await User.findById(decoded.id)
+    const valid = speakeasy.totp.verify({
+      secret: user.twoFactorSecret,
+      encoding: "base32",
+      token: code,
+      window: 1
+    })
+
+    if (!valid)
+      return res.status(400).json({ error: "Invalid code" })
+
+    const token = createToken(user)
+    res.json({ token, username: user.username, lucks: user.lucks })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Desactivar 2FA
+app.post("/auth/2fa/disable", auth, async (req, res) => {
+  try {
+    const { code } = req.body
+    const user = await User.findById(req.user.id)
+
+    if (!user.twoFactorEnabled)
+      return res.status(400).json({ error: "2FA not enabled" })
+
+    const valid = speakeasy.totp.verify({
+      secret: user.twoFactorSecret,
+      encoding: "base32",
+      token: code,
+      window: 1
+    })
+
+    if (!valid)
+      return res.status(400).json({ error: "Invalid code" })
+
+    user.twoFactorEnabled = false
+    user.twoFactorSecret = null
+    await user.save()
+
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // =========================
 // HEALTH
 // =========================
