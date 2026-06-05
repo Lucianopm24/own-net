@@ -2258,9 +2258,9 @@ const LuxerUsageSchema = new mongoose.Schema({
 const LuxerUsage = mongoose.models.LuxerUsage || mongoose.model("LuxerUsage", LuxerUsageSchema)
 
 const LUXER_TIERS = {
-  free: { messages: 10, price: 0 },
-  pro:  { messages: 50, price: 999 },
-  max:  { messages: 250, price: 5549 }
+  free: { messages: 25, price: 0 },
+  pro:  { messages: 125, price: 399 },
+  max:  { messages: 625, price: 1549 }
 }
 const WINDOW_MS = 5 * 60 * 60 * 1000 // 5 horas
 
