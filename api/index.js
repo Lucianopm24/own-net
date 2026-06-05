@@ -2293,6 +2293,56 @@ async function callGemini(messages) {
   return d.candidates[0].content.parts[0].text
 }
 
+async function callMistral(messages) {
+  const r = await fetch("https://api.mistral.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${process.env.MISTRAL_API_KEY}`
+    },
+    body: JSON.stringify({ model: "mistral-small-latest", messages, max_tokens: 1024 })
+  })
+  const d = await r.json()
+  if (!r.ok) throw new Error(d.message || "Mistral error")
+  return d.choices[0].message.content
+}
+
+async function callCohere(messages) {
+  const history = messages.slice(0, -1).map(m => ({
+    role: m.role === "assistant" ? "CHATBOT" : "USER",
+    message: m.content
+  }))
+  const last = messages[messages.length - 1]
+  const r = await fetch("https://api.cohere.com/v1/chat", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${process.env.COHERE_API_KEY}`
+    },
+    body: JSON.stringify({ model: "command-r", message: last.content, chat_history: history, max_tokens: 1024 })
+  })
+  const d = await r.json()
+  if (!r.ok) throw new Error(d.message || "Cohere error")
+  return d.text
+}
+
+async function callCloudflareAI(messages) {
+  const r = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${process.env.CF_ACCOUNT_ID}/ai/run/@cf/meta/llama-3.1-8b-instruct`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.CF_AI_TOKEN}`
+      },
+      body: JSON.stringify({ messages, max_tokens: 1024 })
+    }
+  )
+  const d = await r.json()
+  if (!r.ok || !d.success) throw new Error("Cloudflare AI error")
+  return d.result.response
+}
+
 async function callHuggingFace(messages) {
   const prompt = messages.map(m => `${m.role}: ${m.content}`).join("\n") + "\nassistant:"
   const r = await fetch("https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3", {
@@ -2317,13 +2367,20 @@ async function callOpenRouter(messages) {
 }
 
 async function callAI(messages) {
-  const providers = [callGroq, callGemini, callHuggingFace, callOpenRouter]
+  const providers = [
+    callGroq,
+    callGemini,
+    callMistral,
+    callCohere,
+    callHuggingFace,
+    callOpenRouter,
+    callCloudflareAI
+  ]
   for (const fn of providers) {
-    try { return { text: await fn(messages), ok: true } } catch (e) { continue }
+    try { return { text: await fn(messages), ok: true } } catch { continue }
   }
   return { text: null, ok: false }
 }
-
 // Chat
 app.post("/luxer/chat", auth, async (req, res) => {
   try {
