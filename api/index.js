@@ -2384,7 +2384,7 @@ async function callAI(messages) {
 // Chat
 app.post("/luxer/chat", auth, async (req, res) => {
   try {
-    const { messages } = req.body
+    const { messages, model } = req.body
     if (!messages || !Array.isArray(messages))
       return res.status(400).json({ error: "Missing messages" })
 
@@ -2434,14 +2434,46 @@ app.post("/luxer/chat", auth, async (req, res) => {
       })
     }
 
-    const trimmed = messages.map(m => ({
+    const { model } = req.body
+
+const MODEL_PROVIDERS = {
+  auto:        { fn: callAI,          tiers: ["free","pro","max"], cost: 1 },
+  groq:        { fn: callGroq,        tiers: ["pro","max"],        cost: 3 },
+  mistral:     { fn: callMistral,     tiers: ["pro","max"],        cost: 3 },
+  cohere:      { fn: callCohere,      tiers: ["pro","max"],        cost: 3 },
+  gemini:      { fn: callGemini,      tiers: ["max"],              cost: 3 },
+  cloudflare:  { fn: callCloudflareAI,tiers: ["max"],              cost: 3 },
+  huggingface: { fn: callHuggingFace, tiers: ["free","pro","max"], cost: 2 },
+  openrouter:  { fn: callOpenRouter,  tiers: ["free","pro","max"], cost: 2 },
+}
+
+const selected = MODEL_PROVIDERS[model] || MODEL_PROVIDERS.auto
+if (!selected.tiers.includes(usage.tier))
+  return res.status(403).json({ error: "model_locked", message: `Ese modelo requiere un plan superior.` })
+
+const msgCost = selected.cost
+if (usage.messages + msgCost > limit && !usage.payg)
+  return res.status(429).json({ error: "limit_reached", tier: usage.tier })
+
+const trimmed = messages.map(m => ({
   ...m,
   content: m.content.length > 500 ? m.content.slice(0, 500) + "…[truncado]" : m.content
 }))
-const result = await callAI(trimmed)
+
+let result
+if (model && model !== "auto") {
+  try {
+    const text = await selected.fn(trimmed)
+    result = { text, ok: true }
+  } catch {
+    result = await callAI(trimmed)
+  }
+} else {
+  result = await callAI(trimmed)
+}
     if (!result.ok) return res.status(503).json({ error: "All AI providers failed" })
 
-    usage.messages += 1
+    usage.messages += msgCost
     await usage.save()
 
     res.json({ reply: result.text, usage: { messages: usage.messages, limit, tier: usage.tier } })
@@ -2496,75 +2528,6 @@ app.get("/luxer/status", auth, async (req, res) => {
       reset_in_minutes: resetIn < 0 ? 0 : resetIn,
       payg: usage.payg
     })
-  } catch (e) { res.status(500).json({ error: e.message }) }
-})
-
-// =========================
-// LUXER HISTORY
-// =========================
-
-const LuxerChatSchema = new mongoose.Schema({
-  id: { type: String, unique: true },
-  username: String,
-  title: String,
-  messages: [{ role: String, content: String }],
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
-})
-const LuxerChat = mongoose.models.LuxerChat || mongoose.model("LuxerChat", LuxerChatSchema)
-
-// Listar chats
-app.get("/luxer/chats", auth, async (req, res) => {
-  try {
-    const chats = await LuxerChat.find({ username: req.user.username }, { messages: 0 }).sort({ updatedAt: -1 })
-    res.json(chats)
-  } catch (e) { res.status(500).json({ error: e.message }) }
-})
-
-// Obtener chat completo
-app.get("/luxer/chats/:id", auth, async (req, res) => {
-  try {
-    const chat = await LuxerChat.findOne({ id: req.params.id, username: req.user.username })
-    if (!chat) return res.status(404).json({ error: "Not found" })
-    res.json(chat)
-  } catch (e) { res.status(500).json({ error: e.message }) }
-})
-
-// Crear chat
-app.post("/luxer/chats", auth, async (req, res) => {
-  try {
-    const { title, messages } = req.body
-    const chat = await LuxerChat.create({
-      id: uuidv4(),
-      username: req.user.username,
-      title: title || "Nueva conversación",
-      messages: messages || []
-    })
-    res.json(chat)
-  } catch (e) { res.status(500).json({ error: e.message }) }
-})
-
-// Actualizar chat (agregar mensajes, cambiar título)
-app.put("/luxer/chats/:id", auth, async (req, res) => {
-  try {
-    const { messages, title } = req.body
-    const chat = await LuxerChat.findOne({ id: req.params.id, username: req.user.username })
-    if (!chat) return res.status(404).json({ error: "Not found" })
-    if (messages !== undefined) chat.messages = messages
-    if (title !== undefined) chat.title = title
-    chat.updatedAt = new Date()
-    await chat.save()
-    res.json({ success: true })
-  } catch (e) { res.status(500).json({ error: e.message }) }
-})
-
-// Borrar chat
-app.delete("/luxer/chats/:id", auth, async (req, res) => {
-  try {
-    const chat = await LuxerChat.findOne({ id: req.params.id, username: req.user.username })
-    if (!chat) return res.status(404).json({ error: "Not found" })
-    await chat.deleteOne()
-    res.json({ success: true })
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
