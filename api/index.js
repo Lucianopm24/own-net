@@ -2384,7 +2384,7 @@ async function callAI(messages) {
 // Chat
 app.post("/luxer/chat", auth, async (req, res) => {
   try {
-    const { messages, model } = req.body
+    const { messages, model: selectedModel } = req.body
     if (!messages || !Array.isArray(messages))
       return res.status(400).json({ error: "Missing messages" })
 
@@ -2447,7 +2447,7 @@ const MODEL_PROVIDERS = {
   openrouter:  { fn: callOpenRouter,  tiers: ["free","pro","max"], cost: 2 },
 }
 
-const selected = MODEL_PROVIDERS[model] || MODEL_PROVIDERS.auto
+const selected = MODEL_PROVIDERS[selectedModel] || MODEL_PROVIDERS.auto
 if (!selected.tiers.includes(usage.tier))
   return res.status(403).json({ error: "model_locked", message: `Ese modelo requiere un plan superior.` })
 
@@ -2461,7 +2461,7 @@ const trimmed = messages.map(m => ({
 }))
 
 let result
-if (model && model !== "auto") {
+if (selectedModel && selectedModel !== "auto") {
   try {
     const text = await selected.fn(trimmed)
     result = { text, ok: true }
