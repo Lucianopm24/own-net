@@ -3216,6 +3216,57 @@ app.delete("/pelican/admin/permissions/:username", auth, pelicanAdmin, async (re
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// TELEGRAM PDF UPLOAD
+app.post("/telegram/upload-pdf", async (req, res) => {
+  try {
+    const { base64, filename } = req.body
+    if (!base64) return res.status(400).json({ error: "Missing file" })
+
+    const token = process.env.TG_BOT_TOKEN
+    const chatId = process.env.TG_CHAT_ID
+
+    const buffer = Buffer.from(base64, "base64")
+    if (buffer.length > 20 * 1024 * 1024)
+      return res.status(400).json({ error: "File too large (max 20MB)" })
+
+    const FormData = require("form-data")
+    const form = new FormData()
+    form.append("chat_id", chatId)
+    form.append("document", buffer, {
+      filename: filename || "documento.pdf",
+      contentType: "application/pdf"
+    })
+
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
+      method: "POST", body: form, headers: form.getHeaders()
+    })
+    const d = await r.json()
+    if (!d.ok) return res.status(500).json({ error: d.description })
+
+    const fileId = d.result.document.file_id
+
+    // Devuelve el fileId — permanente mientras exista el bot
+    res.json({ success: true, fileId, url: `/telegram/file/${fileId}` })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Regenerar URL fresca a partir del fileId
+app.get("/telegram/file/:fileId", async (req, res) => {
+  try {
+    const token = process.env.TG_BOT_TOKEN
+    const r = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${req.params.fileId}`)
+    const d = await r.json()
+    if (!d.ok) return res.status(404).json({ error: "File not found" })
+    const url = `https://api.telegram.org/file/bot${token}/${d.result.file_path}`
+    // Redirect directo al archivo
+    res.redirect(url)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // =========================
 // HEALTH
 // =========================
