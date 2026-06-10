@@ -2850,6 +2850,14 @@ app.post("/pelican/login", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+app.get("/pelican/me", pelicanAuth, async (req, res) => {
+  try {
+    const user = await PelicanUser.findOne({ username: req.pelican.username }, { password: 0 })
+    if (!user) return res.status(404).json({ error: "Not found" })
+    res.json({ username: user.username, displayName: user.displayName })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
 // ═══════════════════════
 // ADMIN — USUARIOS
 // ═══════════════════════
