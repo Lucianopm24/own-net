@@ -3286,6 +3286,24 @@ app.get("/telegram/file/:fileId", async (req, res) => {
   }
 })
 
+app.get("/telegram/preview/:fileId", async (req, res) => {
+  try {
+    const token = process.env.TG_BOT_TOKEN
+    const r = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${req.params.fileId}`)
+    const d = await r.json()
+    if (!d.ok) return res.status(404).send("File not found")
+    const url = `https://api.telegram.org/file/bot${token}/${d.result.file_path}`
+    // Sirve el PDF con header inline para que el navegador lo muestre
+    const pdfRes = await fetch(url)
+    const buffer = await pdfRes.buffer()
+    res.setHeader("Content-Type", "application/pdf")
+    res.setHeader("Content-Disposition", "inline")
+    res.send(buffer)
+  } catch (e) {
+    res.status(500).send(e.message)
+  }
+})
+
 // =========================
 // HEALTH
 // =========================
