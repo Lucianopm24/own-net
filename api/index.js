@@ -3329,34 +3329,16 @@ function cdnPrice(sizeBytes) {
   return 200
 }
 
-// Subir archivo
+// Subir archivo (recibe fileId del Worker, solo guarda metadata)
 app.post("/cdn/upload", auth, async (req, res) => {
   try {
-    const { base64, filename, mimetype, public: isPublic } = req.body
-    if (!base64 || !filename) return res.status(400).json({ error: "Missing fields" })
+    const { fileId, filename, mimetype, size, public: isPublic } = req.body
+    if (!fileId || !filename || !size) return res.status(400).json({ error: "Missing fields" })
 
-    const buffer = Buffer.from(base64, "base64")
-    const size = buffer.length
     const price = cdnPrice(size)
-
     const user = await User.findById(req.user.id)
     if (user.lucks < price)
-      return res.status(400).json({ error: `Not enough lucks. Need ${price} LUCKS for this file.` })
-
-    const token = process.env.TG_BOT_TOKEN
-    const chatId = process.env.TG_CHAT_ID
-    const FormData = require("form-data")
-    const form = new FormData()
-    form.append("chat_id", chatId)
-    form.append("document", buffer, { filename, contentType: mimetype || "application/octet-stream" })
-
-    const r = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
-      method: "POST", body: form, headers: form.getHeaders()
-    })
-    const d = await r.json()
-    if (!d.ok) return res.status(500).json({ error: d.description })
-
-    const fileId = d.result.document.file_id
+      return res.status(400).json({ error: `Not enough lucks. Need ${price} LUCKS.` })
 
     user.lucks -= price
     await user.save()
