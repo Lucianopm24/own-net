@@ -3305,6 +3305,132 @@ app.get("/telegram/preview/:fileId", async (req, res) => {
 })
 
 // =========================
+// CDN
+// =========================
+
+const CDNFileSchema = new mongoose.Schema({
+  id: { type: String, unique: true },
+  fileId: String,
+  filename: String,
+  mimetype: String,
+  size: Number,
+  owner: String,
+  public: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
+})
+const CDNFile = mongoose.models.CDNFile || mongoose.model("CDNFile", CDNFileSchema)
+
+function cdnPrice(sizeBytes) {
+  const mb = sizeBytes / (1024 * 1024)
+  if (mb < 4.5) return 10
+  if (mb < 20)  return 30
+  if (mb < 50)  return 60
+  if (mb < 100) return 100
+  return 200
+}
+
+// Subir archivo
+app.post("/cdn/upload", auth, async (req, res) => {
+  try {
+    const { base64, filename, mimetype, public: isPublic } = req.body
+    if (!base64 || !filename) return res.status(400).json({ error: "Missing fields" })
+
+    const buffer = Buffer.from(base64, "base64")
+    const size = buffer.length
+    const price = cdnPrice(size)
+
+    const user = await User.findById(req.user.id)
+    if (user.lucks < price)
+      return res.status(400).json({ error: `Not enough lucks. Need ${price} LUCKS for this file.` })
+
+    const token = process.env.TG_BOT_TOKEN
+    const chatId = process.env.TG_CHAT_ID
+    const FormData = require("form-data")
+    const form = new FormData()
+    form.append("chat_id", chatId)
+    form.append("document", buffer, { filename, contentType: mimetype || "application/octet-stream" })
+
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
+      method: "POST", body: form, headers: form.getHeaders()
+    })
+    const d = await r.json()
+    if (!d.ok) return res.status(500).json({ error: d.description })
+
+    const fileId = d.result.document.file_id
+
+    user.lucks -= price
+    await user.save()
+
+    const file = await CDNFile.create({
+      id: uuidv4(), fileId, filename,
+      mimetype: mimetype || "application/octet-stream",
+      size, owner: user.username,
+      public: isPublic || false
+    })
+
+    res.json({ success: true, id: file.id, price, balance: user.lucks })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Listar archivos del usuario
+app.get("/cdn/files", auth, async (req, res) => {
+  try {
+    const files = await CDNFile.find({ owner: req.user.username }).sort({ createdAt: -1 })
+    res.json(files)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Servir archivo
+app.get("/cdn/file/:id", async (req, res) => {
+  try {
+    const file = await CDNFile.findOne({ id: req.params.id })
+    if (!file) return res.status(404).json({ error: "Not found" })
+    if (!file.public) {
+      const auth2 = req.headers.authorization
+      if (!auth2) return res.status(403).json({ error: "Private file" })
+      try {
+        const decoded = jwt.verify(auth2.split(" ")[1], JWT_SECRET)
+        if (decoded.username !== file.owner) return res.status(403).json({ error: "Unauthorized" })
+      } catch { return res.status(403).json({ error: "Unauthorized" }) }
+    }
+    const token = process.env.TG_BOT_TOKEN
+    const r = await fetch(`https://api.telegram.org/bot${token}/getFile?file_id=${file.fileId}`)
+    const d = await r.json()
+    if (!d.ok) return res.status(404).json({ error: "File not found on Telegram" })
+    const url = `https://api.telegram.org/file/bot${token}/${d.result.file_path}`
+    const fileRes = await fetch(url)
+    const buffer = await fileRes.buffer()
+    res.setHeader("Content-Type", file.mimetype)
+    res.setHeader("Content-Disposition", `inline; filename="${file.filename}"`)
+    res.send(buffer)
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Eliminar archivo
+app.delete("/cdn/file/:id", auth, async (req, res) => {
+  try {
+    const file = await CDNFile.findOne({ id: req.params.id })
+    if (!file) return res.status(404).json({ error: "Not found" })
+    if (file.owner !== req.user.username) return res.status(403).json({ error: "Unauthorized" })
+    await file.deleteOne()
+    res.json({ success: true })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// Cambiar visibilidad
+app.post("/cdn/file/:id/visibility", auth, async (req, res) => {
+  try {
+    const { public: isPublic } = req.body
+    const file = await CDNFile.findOne({ id: req.params.id })
+    if (!file) return res.status(404).json({ error: "Not found" })
+    if (file.owner !== req.user.username) return res.status(403).json({ error: "Unauthorized" })
+    file.public = isPublic
+    await file.save()
+    res.json({ success: true, public: file.public })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+// =========================
 // HEALTH
 // =========================
 
