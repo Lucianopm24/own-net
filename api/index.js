@@ -3412,6 +3412,29 @@ app.post("/cdn/file/:id/visibility", auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
 
+// Exchange LUCKS → Neat Points (llamado desde Neat)
+app.post("/exchange/lucks-to-neat", auth, async (req, res) => {
+  try {
+    const { lucks, neatUsername, neatKey } = req.body;
+    
+    // Verificar que la key es de Neat
+    if (neatKey !== process.env.NEAT_EXCHANGE_KEY)
+      return res.status(403).json({ error: "Invalid key" });
+    
+    if (!lucks || lucks <= 0 || lucks % 12 !== 0)
+      return res.status(400).json({ error: "Debe ser múltiplo de 12" });
+    
+    const user = await User.findById(req.user.id);
+    if (user.lucks < lucks)
+      return res.status(400).json({ error: "Not enough lucks" });
+    
+    user.lucks -= lucks;
+    await user.save();
+    
+    res.json({ ok: true, lucksSpent: lucks, npToCredit: Math.floor(lucks / 12), innernetUsername: user.username });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // =========================
 // HEALTH
 // =========================
