@@ -2606,6 +2606,31 @@ const transporter = nodemailer.createTransport({
   }
 })
 
+// =========================
+// INTERNAL AI COMPLETION (para el bot de GoToSocial / Luxer Fediverse)
+// Reutiliza POLL_SECRET como secreto compartido (mismo valor que en Vercel del bot)
+// =========================
+
+app.post("/internal/ai-completion", async (req, res) => {
+  try {
+    const providedSecret = req.headers["x-internal-secret"]
+    if (!providedSecret || providedSecret !== process.env.POLL_SECRET) {
+      return res.status(401).json({ error: "Unauthorized" })
+    }
+
+    const { messages } = req.body
+    if (!messages || !Array.isArray(messages))
+      return res.status(400).json({ error: "Missing messages" })
+
+    const result = await callAI(messages)
+    if (!result.ok) return res.status(503).json({ error: "All AI providers failed" })
+
+    res.json({ reply: result.text })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ═══════════════════════
 // EMAIL
 // ═══════════════════════
